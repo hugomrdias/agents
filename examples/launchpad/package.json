@@ -1,0 +1,30 @@
+{
+  "name": "launchpad-example",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Example clipact CLI: a mock static-site hosting service",
+  "type": "module",
+  "bin": {
+    "launchpad": "./bin/launchpad.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test 'test/**/*.test.ts'",
+    "lint": "biome check .",
+    "bench": "node scripts/bench.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm lint"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "clipact": "workspace:*",
+    "esbuild": "0.28.2",
+    "typescript": "catalog:",
+    "zod": "4.6.5"
+  }
+}
