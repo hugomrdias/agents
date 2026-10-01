@@ -11,6 +11,8 @@ A small framework for Node.js CLIs that agents and humans can both rely on. It i
 
 The only runtime dependency is the types-only [`@standard-schema/spec`](https://standardschema.dev). Requires Node.js 24 or newer.
 
+For a complete CLI that uses every feature, with esbuild bundling and the compile-cache shim, see the [launchpad example](../../examples/launchpad/README.md).
+
 ## Contents
 
 - [Quick start](#quick-start)
@@ -180,7 +182,7 @@ Detection changes presentation only:
 | Color and status lines | On a TTY (respecting `NO_COLOR` and `FORCE_COLOR`) | Off |
 | Prompts | When stdin and stdout are TTYs and `CI` is unset | Never |
 | Help | Narrative with global flags | Examples first, output fields, error codes, side effects, `schema` pointer |
-| Usage errors | Usage line on stderr | Full command help on stderr, then the JSON result |
+| Usage errors | Usage line on stderr | Full command help (or group help, for an unknown or missing subcommand) on stderr, then the JSON result |
 | Progress | Rewritten status line | A plain line at most every 15 s |
 
 It never changes permissions, confirmations, exit codes, the JSON shape, or which operation runs.
@@ -201,13 +203,15 @@ Command-line strings are converted to the field's JSON Schema type before valida
 | Field type | Command line | Environment variable |
 | --- | --- | --- |
 | `string`, enum | As given | As given |
-| `number`, `integer` | `--copies 3`; a non-number is passed through for the schema to reject | Same |
+| `number`, `integer` | Decimal only: `3`, `-1.5`, `2e3`. Anything else (`0x10`, ` 5`, empty) is passed through as a string for the schema to reject | Same |
 | `boolean` | `--force`, `--no-force`, `--force=true\|false\|1\|0` | `true`, `false`, `1`, `0` |
 | `array` | Repeat the flag (`--tag a --tag b`), or a variadic last positional | Comma-separated |
 | `object` | JSON (`--meta '{"a":1}'`) | JSON |
 | Union of several types | As given | As given |
 
 Positional rules, checked when a command is first resolved: each positional names an input field; only the last may be an array (a variadic such as `label <id> <labels...>`); required positionals come before optional ones; booleans, objects, and secrets cannot be positional. Only one source may read stdin, so `--input -` with a `-` argument is rejected.
+
+Values from flags, positionals, and environment variables may not contain control characters other than tab, line feed, and carriage return; ANSI escapes or NUL in a command line usually mean a garbled argument. `--input` JSON is exempt, since it can encode any text deliberately. When `--input` cannot be read or parsed, only that problem is reported, not every field it would have provided. Reading `--input -` stops when the command is interrupted, so an open stdin never blocks a SIGTERM.
 
 All problems are reported at once, using field names and the source of each value (`flag`, `positional`, `input`, `env:NAME`). An unknown flag gets a suggestion, and the value after it is not reported a second time as an extra argument:
 
@@ -251,7 +255,7 @@ When `confirm` yields a reason and neither `--yes` nor `--dry-run` was given:
 - **Otherwise**: the command fails without side effects. The `next` step repeats the exact command line with `--yes`, shell-quoted and placed before any `--`:
 
 ```json
-{"ok":false,"error":{"code":"confirmation_required","message":"Spends mainnet funds for 2 copies. Confirm with --yes.","retryable":false,"details":{"reason":"Spends mainnet funds for 2 copies."}},"next":[{"by":"user","command":"acme artifacts put a.txt --yes","description":"Ask the user to approve this action, then run it with --yes"}]}
+{"ok":false,"error":{"code":"confirmation_required","message":"Spends mainnet funds for 2 copies. Confirm with --yes.","retryable":false,"details":{"reason":"Spends mainnet funds for 2 copies."}},"next":[{"by":"user","command":"acme artifacts put a.txt --yes","description":"Approve this action, then run it with --yes"}]}
 ```
 
 Agent detection never relaxes the gate. `--yes` and `--dry-run` are unknown flags on commands that do not declare `confirm` or `dryRun`.
@@ -482,8 +486,8 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, d
 
 | Export | Description |
 | --- | --- |
-| `invoke(cli, args, options?)` | Runs in process with captured streams. Options: `env` (empty by default so the runner's agent variables do not leak in), `stdin`, `tty`, `signal`, `strict` (default `true`). Returns `RunResult & { outcome }`. |
-| `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` set. Options: `env`, `stdin`, `kill: { signal, when }` (sends the signal once stderr contains `when`), `timeoutMs`. |
+| `invoke(cli, args, options?)` | Runs in process with captured streams. Options: `env` (empty by default so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, `strict` (default `true`). Returns `RunResult & { outcome }`. |
+| `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` set. Options: `env`, `stdin`, `keepStdinOpen`, `kill: { signal, when?, afterMs? }` (sends the signal once stderr contains `when`, or after `afterMs`), `timeoutMs`. |
 | `assertContract(result)` | Asserts stdout is exactly one compact JSON object with a boolean `ok`, the exit code matches `ok`, stdout has no ANSI codes, and stderr has no JSON. Returns the parsed result. |
 | `assertDefinitions(cli)` | Resolves every command and fails with all definition errors at once. |
 | `schemas(cli)` | Every command's `schema` output keyed by path, for snapshot tests. |

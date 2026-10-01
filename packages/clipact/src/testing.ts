@@ -23,7 +23,8 @@ export interface RunResult {
 export interface InvokeOptions {
   /** Environment; empty by default so the test runner's agent variables do not leak in. */
   env?: Env
-  stdin?: string
+  /** Text to read from stdin, or a stream, such as one that never ends. */
+  stdin?: string | NodeJS.ReadableStream
   /** Pretend stdin, stdout, and stderr are terminals. */
   tty?: boolean
   signal?: AbortSignal
@@ -70,7 +71,9 @@ export async function invoke(
   const stdout = new Capture(tty)
   const stderr = new Capture(tty)
   const stdin = Object.assign(
-    Readable.from(options.stdin === undefined ? [] : [options.stdin]),
+    typeof options.stdin === 'object'
+      ? options.stdin
+      : Readable.from(options.stdin === undefined ? [] : [options.stdin]),
     { isTTY: tty }
   )
   const outcome = await cli.execute(
@@ -93,8 +96,10 @@ export interface ExecOptions {
   /** Added to a minimal environment containing only `PATH`. */
   env?: Env
   stdin?: string
-  /** Sends this signal once stderr contains `when`. */
-  kill?: { signal: NodeJS.Signals; when: string }
+  /** Sends this signal once stderr contains `when`, or after `afterMs`. */
+  kill?: { signal: NodeJS.Signals; when?: string; afterMs?: number }
+  /** Leave stdin open instead of closing it after `stdin` is written. */
+  keepStdinOpen?: boolean
   timeoutMs?: number
 }
 
@@ -115,12 +120,20 @@ export function exec(
     let stdout = ''
     let stderr = ''
     let killed = false
+    if (options.kill?.afterMs !== undefined) {
+      const { signal, afterMs } = options.kill
+      setTimeout(() => {
+        killed = true
+        child.kill(signal)
+      }, afterMs)
+    }
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       stdout += chunk
     })
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       stderr += chunk
-      if (options.kill && !killed && stderr.includes(options.kill.when)) {
+      const when = options.kill?.when
+      if (options.kill && !killed && when && stderr.includes(when)) {
         killed = true
         child.kill(options.kill.signal)
       }
@@ -129,7 +142,12 @@ export function exec(
     child.on('close', (exitCode, signal) => {
       resolve({ exitCode, signal, stdout, stderr, json: parseJson(stdout) })
     })
-    child.stdin.end(options.stdin ?? '')
+    if (options.keepStdinOpen) {
+      child.stdin.write(options.stdin ?? '')
+      child.on('close', () => child.stdin.destroy())
+    } else {
+      child.stdin.end(options.stdin ?? '')
+    }
   })
 }
 

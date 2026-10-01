@@ -210,6 +210,8 @@ class Invocation {
   readonly #state: InvocationState
   #spec: CommandSpec | undefined
   #checkpoint: Checkpoint | undefined
+  /** Agent help for the group a routing error happened in. */
+  #groupHelp: string | undefined
 
   /** Creates an invocation. */
   constructor(state: InvocationState) {
@@ -226,6 +228,7 @@ class Invocation {
         return { exitCode: 0, result: undefined, signal: undefined }
       }
       if (routed.kind === 'unknown') {
+        this.#groupHelp = groupHelp(cli, routed.group, routed.path, true)
         throw unknownCommand(cli, routed)
       }
       if (routed.kind === 'schema') {
@@ -237,6 +240,7 @@ class Invocation {
           await session.text(groupHelp(cli, node, path, Boolean(mode.agent)))
           return { exitCode: 0, result: undefined, signal: undefined }
         }
+        this.#groupHelp = groupHelp(cli, node, path, true)
         throw missingCommand(cli, node, path)
       }
       const spec = resolveSpec(node, path.join(' '))
@@ -301,6 +305,8 @@ class Invocation {
     if (cliError.code === 'invalid_input' && this.#spec) {
       extras.usage = usage(cli, this.#spec)
       extras.help = commandHelp(cli, this.#spec, true)
+    } else if (cliError.code === 'invalid_input') {
+      extras.help = this.#groupHelp
     }
     return await this.#finish(this.#checked(result), extras)
   }
@@ -361,7 +367,7 @@ class Invocation {
       value: input,
       sources,
       framework,
-    } = await resolveInput(spec, rest, io)
+    } = await resolveInput(spec, rest, io, signal)
     if (session.debug) {
       session.log(describeSources(spec, input, sources))
     }
@@ -475,8 +481,7 @@ class Invocation {
         {
           by: 'user',
           command: rerunWithYes(cli.name, args),
-          description:
-            'Ask the user to approve this action, then run it with --yes',
+          description: 'Approve this action, then run it with --yes',
         },
       ],
     })

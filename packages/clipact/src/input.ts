@@ -30,7 +30,8 @@ export interface ResolvedInput {
 export async function resolveInput(
   spec: CommandSpec,
   args: string[],
-  io: Io
+  io: Io,
+  signal: AbortSignal
 ): Promise<ResolvedInput> {
   const issues: InputIssue[] = []
   const values: Record<string, unknown> = {}
@@ -38,9 +39,22 @@ export async function resolveInput(
   const framework = parseCommandArgs(spec, args, values, sources, issues)
 
   if (framework.input !== undefined) {
-    await mergeInputJson(spec, framework.input, io, values, sources, issues)
+    const merged = await mergeInputJson(
+      spec,
+      framework.input,
+      io,
+      signal,
+      values,
+      sources,
+      issues
+    )
+    if (!merged) {
+      // Every field would also be reported missing; report only the cause.
+      throw invalidInput(issues)
+    }
   }
   applyEnv(spec, io.env, values, sources, issues)
+  rejectControlCharacters(values, sources, issues)
 
   const flagged = new Set(issues.map((issue) => issue.path))
   const result = await spec.input['~standard'].validate(values)
@@ -85,9 +99,10 @@ function invalidInput(issues: InputIssue[]): CliError {
     ? `${first.path ? `${first.path}: ` : ''}${first.message}`
     : 'Invalid input'
   const more = issues.length > 1 ? ` (and ${issues.length - 1} more)` : ''
+  const end = /[.?!]$/.test(summary) && !more ? '' : '.'
   return new CliError({
     code: 'invalid_input',
-    message: `${summary}${more}.`,
+    message: `${summary}${more}${end}`,
     retryable: false,
     details: issues,
   })
@@ -308,30 +323,34 @@ async function mergeInputJson(
   spec: CommandSpec,
   location: string,
   io: Io,
+  signal: AbortSignal,
   values: Record<string, unknown>,
   sources: Record<string, string>,
   issues: InputIssue[]
-): Promise<void> {
+): Promise<boolean> {
   let text: string
   try {
     text =
       location === '-'
-        ? await readStream(io.stdin)
-        : await readFile(location, 'utf8')
+        ? await readStream(io.stdin, signal)
+        : await readFile(location, { encoding: 'utf8', signal })
   } catch (error) {
+    if (signal.aborted) {
+      throw signal.reason
+    }
     issues.push({
       path: '--input',
       source: 'flag',
       message: `Cannot read ${location === '-' ? 'stdin' : location}: ${(error as Error).message}`,
     })
-    return
+    return false
   }
   let json: unknown
   try {
     json = JSON.parse(text)
   } catch {
     issues.push({ path: '--input', source: 'input', message: 'Not valid JSON' })
-    return
+    return false
   }
   if (typeof json !== 'object' || json === null || Array.isArray(json)) {
     issues.push({
@@ -339,7 +358,7 @@ async function mergeInputJson(
       source: 'input',
       message: 'Must be a JSON object',
     })
-    return
+    return false
   }
   for (const [key, value] of Object.entries(json)) {
     const field = spec.fields.find((candidate) => candidate.name === key)
@@ -360,6 +379,7 @@ async function mergeInputJson(
       sources[key] = 'input'
     }
   }
+  return true
 }
 
 /** Fills missing fields from their environment variables. */
@@ -402,8 +422,8 @@ function applyEnv(
 /** Converts a string to a field's JSON type, leaving it unchanged if it does not fit. */
 function coerce(kind: FieldKind, raw: string): unknown {
   if (kind === 'number' || kind === 'integer') {
-    const number = Number(raw)
-    return raw.trim() !== '' && Number.isFinite(number) ? number : raw
+    // Decimal only: Number() would also accept "0x10", " 5 ", and "".
+    return DECIMAL.test(raw) ? Number(raw) : raw
   }
   if (kind === 'boolean') {
     return parseBoolean(raw) ?? raw
@@ -430,13 +450,73 @@ function parseBoolean(raw: string): boolean | undefined {
 }
 
 /** Reads a stream to a string. */
-async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
-  let text = ''
-  for await (const chunk of stream) {
-    text +=
-      typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+/** A decimal number such as `5`, `-1.5`, or `2e3`. */
+const DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
+
+/** C0 controls except tab, line feed, and carriage return, plus DEL. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: detects control characters
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
+
+/**
+ * Rejects control characters (such as ANSI escapes or NUL) in values from
+ * flags, positionals, and environment variables, a common sign of a
+ * garbled command line. `--input` JSON is exempt; it can encode any text.
+ */
+function rejectControlCharacters(
+  values: Record<string, unknown>,
+  sources: Record<string, string>,
+  issues: InputIssue[]
+): void {
+  for (const [name, source] of Object.entries(sources)) {
+    if (source === 'input') {
+      continue
+    }
+    const items = ([] as unknown[]).concat(values[name])
+    if (items.some((item) => typeof item === 'string' && CONTROL.test(item))) {
+      issues.push({
+        path: name,
+        source,
+        message: 'Contains control characters',
+      })
+    }
   }
-  return text
+}
+
+/** Reads a stream to a string, giving up when `signal` aborts. */
+function readStream(
+  stream: NodeJS.ReadableStream,
+  signal: AbortSignal
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    let text = ''
+    const onData = (chunk: string | Buffer) => {
+      text += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    }
+    const cleanup = () => {
+      stream.off('data', onData)
+      stream.off('end', onEnd)
+      stream.off('error', onError)
+      signal.removeEventListener('abort', onAbort)
+    }
+    const onEnd = () => {
+      cleanup()
+      resolve(text)
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const onAbort = () => {
+      cleanup()
+      stream.pause()
+      reject(signal.reason)
+    }
+    stream.on('data', onData)
+    stream.once('end', onEnd)
+    stream.once('error', onError)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 /** Explains how to supply a missing required field. */

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { describe, test } from 'node:test'
 import {
   assertContract,
@@ -284,8 +285,7 @@ describe('confirmation and dry runs', () => {
         {
           by: 'user',
           command: "acme artifacts put 'my file.txt' --yes",
-          description:
-            'Ask the user to approve this action, then run it with --yes',
+          description: 'Approve this action, then run it with --yes',
         },
       ],
     })
@@ -608,5 +608,96 @@ describe('interruption', () => {
       result.stderr,
       /acme: started op_1; if interrupted, run: acme operations resume op_1/
     )
+  })
+})
+
+describe('input hardening', () => {
+  test('accepts only decimal numbers', async () => {
+    for (const value of ['0x2', ' 2', '', '2px']) {
+      const result = await invoke(
+        cli,
+        ['artifacts', 'put', 'a', `--copies=${value}`],
+        { env: KEY }
+      )
+      assert.equal(
+        (assertContract(result).error as { code: string }).code,
+        'invalid_input',
+        value
+      )
+    }
+    const scientific = await invoke(
+      cli,
+      ['artifacts', 'put', 'a', '--copies', '3e0'],
+      { env: KEY }
+    )
+    assert.equal(assertContract(scientific).ref, 'ref-3')
+  })
+
+  test('rejects control characters on the command line but not in --input', async () => {
+    const flag = await invoke(cli, ['artifacts', 'put', 'a\u001b[31m'], {
+      env: KEY,
+    })
+    assert.deepEqual(
+      (assertContract(flag).error as { details: unknown }).details,
+      [
+        {
+          path: 'path',
+          source: 'positional',
+          message: 'Contains control characters',
+        },
+      ]
+    )
+    const input = await invoke(cli, ['artifacts', 'put', '--input', '-'], {
+      env: KEY,
+      stdin: JSON.stringify({ path: 'line\u0007bell' }),
+    })
+    assert.equal(assertContract(input).ok, true)
+  })
+
+  test('reports only the cause when --input cannot be used', async () => {
+    const result = await invoke(cli, ['artifacts', 'put', '--input', '-'], {
+      env: KEY,
+      stdin: '{',
+    })
+    const error = assertContract(result).error as {
+      message: string
+      details: unknown[]
+    }
+    assert.deepEqual(error.details, [
+      { path: '--input', source: 'input', message: 'Not valid JSON' },
+    ])
+    assert.equal(error.message, '--input: Not valid JSON.')
+  })
+
+  test('does not double punctuation', async () => {
+    const result = await invoke(cli, ['artifacts', 'get', 'x', '--idd', 'y'])
+    assert.equal(
+      (assertContract(result).error as { message: string }).message,
+      '--idd: Unknown flag; did you mean --id?'
+    )
+  })
+
+  test('an interruption while waiting for --input on stdin ends the command', async () => {
+    const controller = new AbortController()
+    const never = new PassThrough()
+    setTimeout(() => controller.abort('SIGTERM'), 20)
+    const result = await invoke(cli, ['artifacts', 'put', '--input', '-'], {
+      env: KEY,
+      stdin: never,
+      signal: controller.signal,
+    })
+    assert.equal(result.signal, 'SIGTERM')
+    assert.equal(
+      (result.json?.error as { code: string } | undefined)?.code,
+      'interrupted'
+    )
+  })
+
+  test('agents get group help on stderr after a routing error', async () => {
+    const result = await invoke(cli, ['artifacts', 'pt'], {
+      env: { AI_AGENT: 'codex' },
+    })
+    assertContract(result)
+    assert.match(result.stderr, /Commands:\n {2}artifacts put/)
   })
 })

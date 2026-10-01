@@ -54,3 +54,19 @@ describe('process', () => {
     assert.match(result.stderr, /Full schema: acme schema artifacts get/)
   })
 })
+
+describe('process stdin', () => {
+  test('SIGTERM while waiting for --input on an open stdin ends the process', async () => {
+    const result = await exec(BIN, ['artifacts', 'put', '--input', '-'], {
+      env: { ACME_PRIVATE_KEY: 'k' },
+      keepStdinOpen: true,
+      kill: { signal: 'SIGTERM', afterMs: 300 },
+      timeoutMs: 5000,
+    })
+    assert.equal(result.signal, 'SIGTERM')
+    assert.equal(
+      (assertContract(result).error as { code: string }).code,
+      'interrupted'
+    )
+  })
+})
