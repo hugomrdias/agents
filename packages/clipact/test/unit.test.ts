@@ -1,0 +1,142 @@
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import * as z from 'zod'
+import {
+  type AnyCommand,
+  defineCli,
+  defineCommand,
+  detectAgent,
+} from '../src/index.ts'
+import { resolveSpec } from '../src/spec.ts'
+import { invoke } from '../src/testing.ts'
+
+const noop = () => Promise.resolve({})
+
+describe('detectAgent', () => {
+  test('prefers AI_AGENT and AGENT over vendor variables', () => {
+    assert.equal(
+      detectAgent({ AI_AGENT: 'claude-code', CODEX_CI: '1' }),
+      'claude-code'
+    )
+    assert.equal(detectAgent({ AGENT: 'amp' }), 'amp')
+    assert.equal(detectAgent({ AI_AGENT: '1' }), 'unknown')
+    assert.equal(detectAgent({ CODEX_THREAD_ID: 't1' }), 'codex')
+    assert.equal(
+      detectAgent({ AI_AGENT: '0', CI: 'true', TERM: 'dumb' }),
+      false
+    )
+  })
+})
+
+describe('definitions', () => {
+  test('defineCommand rejects contradictions', () => {
+    assert.throws(
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          readOnly: true,
+          confirm: 'Sure?',
+          handler: noop,
+        }),
+      /cannot be readOnly and require confirmation/
+    )
+    assert.throws(
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ token: z.string() }),
+          secrets: ['token'],
+          handler: noop,
+        }),
+      /needs an env mapping/
+    )
+  })
+
+  const cases: [string, () => AnyCommand, RegExp][] = [
+    [
+      'array positional before the last',
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ a: z.array(z.string()), b: z.string() }),
+          positionals: ['a', 'b'],
+          handler: noop,
+        }),
+      /only the last positional may be an array/,
+    ],
+    [
+      'required after optional',
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ a: z.string().optional(), b: z.string() }),
+          positionals: ['a', 'b'],
+          handler: noop,
+        }),
+      /required positional "b" follows an optional one/,
+    ],
+    [
+      'unknown positional',
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ a: z.string() }),
+          positionals: ['b' as 'a'],
+          handler: noop,
+        }),
+      /"b" is not an input field/,
+    ],
+    [
+      'framework flag clash',
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ dryRun: z.boolean() }),
+          handler: noop,
+        }),
+      /clashes with the framework flag --dry-run/,
+    ],
+  ]
+  for (const [name, create, message] of cases) {
+    test(`resolveSpec rejects ${name}`, () => {
+      assert.throws(() => resolveSpec(create(), 'x'), message)
+    })
+  }
+
+  test('a definition error becomes internal_error', async () => {
+    const cli = defineCli({
+      name: 'bad',
+      version: '0.0.0',
+      commands: [
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ help: z.boolean() }),
+          handler: noop,
+        }),
+      ],
+    })
+    const result = await invoke(cli, ['x'])
+    assert.match(
+      (result.json?.error as { message: string } | undefined)?.message ?? '',
+      /field "help" clashes with the framework flag --help/
+    )
+  })
+})
+
+describe('progress', () => {
+  test('agents get the first progress line and no status-line escapes', async () => {
+    const result = await invoke(
+      (await import('./fixtures/cli.ts')).cli,
+      ['artifacts', 'put', 'a'],
+      { env: { ACME_PRIVATE_KEY: 'k', AI_AGENT: 'codex' }, tty: true }
+    )
+    assert.equal(result.stderr, 'acme: upload: Uploading a\n')
+  })
+})

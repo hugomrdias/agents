@@ -1,6 +1,6 @@
 # CLI framework design
 
-Date: 2026-10-01. Status: draft design, not implemented. Working name: `cli-kit`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `foc` and future CLIs get the output contract, agent behavior, and startup performance by default.
+Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md); services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `foc` and future CLIs get the output contract, agent behavior, and startup performance by default.
 
 ## Goals
 
@@ -47,7 +47,7 @@ The examples use a placeholder publishing CLI, `acme`; command names and error c
 ```ts
 // commands/artifacts/put.ts
 import * as z from 'zod'
-import { defineCommand } from 'cli-kit'
+import { defineCommand } from 'clipact'
 
 /** Publishes a file or folder and returns a shareable link. */
 export const put = defineCommand({
@@ -74,7 +74,7 @@ export const put = defineCommand({
 
 ```ts
 // commands/artifacts/put.run.ts
-import { defineHandler, CliError } from 'cli-kit'
+import { defineHandler, CliError } from 'clipact'
 import { put } from './put.js'
 
 export default defineHandler(put, async (ctx) => {
@@ -98,7 +98,7 @@ export default defineHandler(put, async (ctx) => {
 
 ```ts
 // main.ts
-import { defineCli, defineGroup } from 'cli-kit'
+import { defineCli, defineGroup } from 'clipact'
 import { put } from './commands/artifacts/put.js'
 
 defineCli({
@@ -115,7 +115,7 @@ defineCli({
 
 ```ts
 // map-error.ts: loaded only when a handler throws something other than a CliError
-import { CliError } from 'cli-kit'
+import { CliError } from 'clipact'
 import { InsufficientFundsError } from 'some-sdk'
 
 /** Translates SDK errors into stable CLI error codes. */
@@ -129,7 +129,7 @@ export default function mapError(error: unknown): CliError | undefined {
 
 There is no middleware system. Cross-cutting concerns (validation, confirmation, errors, output, telemetry, signals) are pipeline steps the framework owns. Shared setup, such as creating an SDK client from `network` and `privateKey`, is a plain application function the handler calls (`const client = await getClient(ctx.input, ctx.signal)`), which TypeScript types without framework generics and which keeps control flow visible. `mapError` is the single application hook, for translating third-party errors in one place without importing SDKs at startup.
 
-`input` is one object schema for everything the command accepts. `positionals` lists, in order, the input fields that may be given as positional arguments; every other field is a flag (`entry` → `--entry`). `defineCommand` checks the definition once: each positional names a field of `input`, only the last positional may be an array (a variadic such as `put <paths...>`), and optional positionals follow required ones. Help, validation errors, `--input` JSON, and `schema` all use the field names.
+`input` is one object schema for everything the command accepts. `positionals` lists, in order, the input fields that may be given as positional arguments; every field is also a flag in kebab case (`privateKey` → `--private-key`), so agents can name positional fields too. `defineCommand` rejects contradictions immediately. Field checks run when a command is first resolved, so startup never converts every schema; `assertDefinitions` runs them for all commands in tests. They require that each positional names a field of `input`, only the last positional may be an array (a variadic such as `put <paths...>`), optional positionals follow required ones, and no field clashes with a framework flag. An optional `human(data)` property formats successful results for human mode; without it, fields print as `key: value`. Help, validation errors, `--input` JSON, and `schema` all use the field names.
 
 `env` maps input fields to environment variables used as fallbacks when the field is not given on the command line or in `--input`. Precedence is flag, positional, or `--input` → environment variable → schema default. An environment value is a fallback, not an explicit source, so it never triggers the `--input` overlap error. Fields listed in `secrets` must have an `env` mapping and come only from the environment: they get no flag, are rejected in `--input`, and are redacted in errors, `--debug` output, telemetry, and `schema` defaults. The mapping lives in the definition rather than in schema metadata, so it works with any Standard Schema library. There are no CLI-wide settings, global flags, or profile files: a value every command needs is declared, with its `env` mapping, in each command's `input` (a shared schema fragment avoids repetition).
 
@@ -149,7 +149,7 @@ An alias resolves to the same definition, so help, schema, and telemetry report 
 
 1. **Install process handlers** before anything else: EPIPE on stdout, `process.once` for SIGINT/SIGTERM/SIGHUP feeding one `AbortController`, and `uncaughtException`/`unhandledRejection` converted to `internal_error`.
 2. **Resolve the mode** from flags (`--json`, `--format human`), `ACME_OUTPUT`, agent detection (`--agent`/`--no-agent`, `ACME_AGENT`, environment variables), and TTYs. The mode decides output, prompts, color, help style, and progress. Framework variables (`ACME_OUTPUT`, `ACME_AGENT`, `ACME_TELEMETRY`) accept fixed values; an invalid value is `invalid_input` naming the variable, except for `--help`, `--version`, and `schema`, which ignore it so discovery always works.
-3. **Route** leading positional tokens through the command tree. An unknown command is `invalid_input` with the closest match and a `next` step for `--help`.
+3. **Route** leading positional tokens through the command tree. An unknown command is `invalid_input` with the closest match and a `next` step for `--help`. A group without a subcommand prints its help in human mode and is `invalid_input` listing its commands in machine mode.
 4. **Fast paths**: `--version`, `--help`, and `schema` render from definitions and exit without loading a handler.
 5. **Parse** with `parseArgs({ strict: false, tokens: true, allowNegative: true })` using options derived from the input's JSON Schema, excluding positional fields (`boolean` → boolean flag, arrays → `multiple`, everything else → string). Positional tokens are assigned to the `positionals` fields in order, with any remainder going to a final array field. Unknown options and extra positionals are detected from the tokens so every problem is reported at once, by name.
 6. **Merge and validate**: convert string values to the JSON Schema type (number, integer), then merge with `--input <file|->` JSON. A field supplied both on the command line and in `--input` is an `invalid_input` error listing the fields; framework flags (`--json`, `--yes`, `--dry-run`, `--agent`) are never part of the input. Only one source may read stdin, so `--input -` together with a `-` positional is also `invalid_input`. Fill fields still missing from their `env` variables, reading only the variables of the command being run and converting them like flag values. Validate the merged object with `~standard.validate`, which applies schema defaults. All issues become one `invalid_input` error with `details: [{ path, source, message }]`, where `source` is `flag`, `positional`, `input`, `env:ACME_NETWORK`, or `default`.
@@ -191,7 +191,7 @@ Agent detection checks `AI_AGENT`, `AGENT`, then a small table of vendor variabl
 Help is rendered from definitions in two styles:
 
 - **Human**: description, usage, arguments, flags, examples, subcommands.
-- **Agent**: examples first, then flags, output fields, error codes, and `acme schema <command>`. Usage errors in agent mode include the command's usage in `error.details`.
+- **Agent**: examples first, then flags, output fields, error codes, and `acme schema <command>`. On usage errors, agents get the command's full help on stderr before the JSON result, keeping `error.details` a list of issues; humans get the usage line.
 
 ## Built-in commands and flags
 
@@ -216,12 +216,13 @@ Help is rendered from definitions in two styles:
 
 ## Testing
 
-`cli-kit/testing` exports helpers for the Node test runner:
+`clipact/testing` exports helpers for the Node test runner:
 
-- `run(bin, argv, { env, stdin })` spawns the built binary without a TTY and returns `{ stdout, stderr, exitCode, signal, json }`.
-- Assertions: stdout is exactly one JSON object; it matches the command's output schema; `exitCode` equals `ok ? 0 : 1`; stdout has no ANSI codes; stderr has no JSON.
-- `snapshotSchemas(cli)` writes every command's `schema` output for review in CI.
-- A startup check that runs `--version` and `schema --list` against a budget relative to `node -e ''`.
+- `invoke(cli, argv, { env, stdin, tty, signal })` runs in process with captured streams and an empty environment, so the runner's agent variables do not leak in. It enables strict checks: outputs must match the output schema, error codes must be declared, data may not use the envelope keys, and only `readOnly` or `idempotent` commands may return `retryable: true`.
+- `exec(bin, argv, { env, stdin, kill })` spawns an entry file without a TTY and with only `PATH` set, optionally sending a signal once stderr shows a given text. Both return `{ stdout, stderr, exitCode, signal, json }`.
+- `assertContract(result)`: stdout is exactly one compact JSON object with a boolean `ok`; `exitCode` equals `ok ? 0 : 1`; stdout has no ANSI codes; stderr has no JSON.
+- `assertDefinitions(cli)` resolves every command and reports all definition errors; `schemas(cli)` returns every command's `schema` output for snapshot tests.
+- Not yet implemented: a startup check that runs `--version` and `schema --list` against a budget relative to `node -e ''`.
 
 ## Performance budget
 
@@ -230,6 +231,8 @@ Help is rendered from definitions in two styles:
 | `--version` | ≤ 10 ms | Entry shim and framework core |
 | `--help`, `schema` | ≤ 20 ms | Plus definitions and the schema library |
 | A command, excluding its own dependencies | ≤ 25 ms | Plus the handler module |
+
+Measured on Homebrew Node v26.10.0 (baseline 59 ms, warm compile cache, median of 20 runs) with a two-command zod CLI bundled by esbuild with handler chunks: importing the framework alone costs 6 ms, `--version` 9 ms, `--help` 8 ms, `schema <command>` 10 ms, and a command 14 ms. Unbundled, the same CLI costs 27–33 ms, mostly from loading zod's modules.
 
 Applications bundle to one ESM file with handlers as separate chunks. If definitions plus zod exceed the budget, a build step can precompute `--help` and `schema` output into a JSON manifest so metadata commands load neither.
 
@@ -290,7 +293,7 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 
 ## Milestones
 
-1. **Core**: definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
+1. **Core** (implemented): definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
 2. **Spike**: build `foc artifacts put` and `foc operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI.
 3. **Services**: telemetry, skills, gating and dry-run polish, startup budget in CI.
 4. **Later**: `--events`, static shell completions.
