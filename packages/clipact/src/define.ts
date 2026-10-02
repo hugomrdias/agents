@@ -231,21 +231,38 @@ export function defineCommand<
   }) as Command<I, O>
 }
 
+/** Options for {@link markBuiltin}. */
+interface BuiltinOptions {
+  /**
+   * A successful result prints the command's `human` text in every mode
+   * instead of a JSON result, such as a shell script read by `eval`.
+   */
+  plainText?: boolean
+}
+
 /** Framework commands routed like any other but kept out of command lists. */
-const BUILTIN_NODES = new WeakSet<CommandNode>()
+const BUILTIN_NODES = new WeakMap<CommandNode, BuiltinOptions>()
 
 /**
  * Marks a framework-owned command as built-in: it is listed under "Built-in"
  * in root help instead of with the application's commands.
  */
-export function markBuiltin<T extends CommandNode>(node: T): T {
-  BUILTIN_NODES.add(node)
+export function markBuiltin<T extends CommandNode>(
+  node: T,
+  options: BuiltinOptions = {}
+): T {
+  BUILTIN_NODES.set(node, options)
   return node
 }
 
 /** Returns `true` for a command marked with {@link markBuiltin}. */
 export function isBuiltin(node: CommandNode): boolean {
   return BUILTIN_NODES.has(node)
+}
+
+/** Returns `true` for a built-in whose successful result is plain text. */
+export function printsPlainText(node: CommandNode): boolean {
+  return BUILTIN_NODES.get(node)?.plainText === true
 }
 
 /** Defines a group of commands, such as `artifacts` in `acme artifacts put`. */

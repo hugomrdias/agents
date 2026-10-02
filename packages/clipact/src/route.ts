@@ -77,11 +77,8 @@ export function flagTokens(flag: FrameworkFlag): string[] {
  * Classifies a raw argument as a framework flag that takes its value from
  * the next argument (`value`), one complete in itself (`switch`), or neither.
  */
-export function frameworkToken(
-  arg: string,
-  flags: readonly FrameworkFlag[] = FRAMEWORK_FLAGS
-): 'value' | 'switch' | undefined {
-  for (const flag of flags) {
+export function frameworkToken(arg: string): 'value' | 'switch' | undefined {
+  for (const flag of FRAMEWORK_FLAGS) {
     if (flag.value) {
       if (arg === `--${flag.name}`) {
         return 'value'
@@ -94,31 +91,6 @@ export function frameworkToken(
     }
   }
   return undefined
-}
-
-/**
- * Built-in commands, as shown in root help and completion. `schema` is a
- * hidden command in the tree; the router handles the others itself.
- */
-export const BUILTINS = {
-  schema: {
-    usage: 'schema [command...]',
-    description: 'JSON Schema for a command, or the command list',
-  },
-  completion: {
-    usage: 'completion <shell>',
-    description: 'Print a bash, zsh, or fish completion script',
-  },
-} as const
-
-/** The name of a built-in command. */
-export type Builtin = keyof typeof BUILTINS
-
-/** Returns the built-ins the router handles: those without a node of the same name at the root. */
-export function builtins(root: Group): Builtin[] {
-  return (Object.keys(BUILTINS) as Builtin[]).filter(
-    (name) => !root.commands.some((child) => child.name === name)
-  )
 }
 
 /** Framework flags that decide the mode and fast paths, scanned before parsing. */
@@ -140,7 +112,6 @@ interface Word {
 /** The result of routing argv through the command tree. */
 export type Route =
   | { kind: 'node'; node: CommandNode; path: string[]; rest: string[] }
-  | { kind: 'builtin'; name: Builtin; rest: string[] }
   | {
       kind: 'unknown'
       group: Group
@@ -229,7 +200,7 @@ export function findNode(root: Group, path: string[]): CommandNode | undefined {
 
 /**
  * Routes leading positional words through groups until a command is
- * reached, resolving aliases and the built-in commands at the root.
+ * reached, resolving aliases.
  */
 export function route(
   root: Group,
@@ -258,16 +229,6 @@ export function route(
       consumed.push(...words.slice(0, aliasWords.length).map((w) => w.index))
       position = aliasWords.length
       break
-    }
-  }
-
-  const first = words[0]
-  const builtin = builtins(root).find((name) => name === first?.value)
-  if (position === 0 && first && builtin) {
-    return {
-      kind: 'builtin',
-      name: builtin,
-      rest: without(args, [first.index]),
     }
   }
 

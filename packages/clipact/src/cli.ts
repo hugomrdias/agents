@@ -1,11 +1,4 @@
-import {
-  COMPLETE_COMMAND,
-  complete,
-  completionHelp,
-  completionScript,
-  isShell,
-  SHELLS,
-} from './completion.ts'
+import { COMPLETE_COMMAND, complete, completionCommand } from './completion.ts'
 import {
   type AnyCommand,
   type Checkpoint,
@@ -17,6 +10,7 @@ import {
   isHandler,
   isOk,
   type Mode,
+  printsPlainText,
   type Schema,
 } from './define.ts'
 import { schemaCommand } from './discovery.ts'
@@ -32,8 +26,6 @@ import { type FrameworkValues, invalidInput, resolveInput } from './input.ts'
 import { type Io, processIo } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
-  FRAMEWORK_FLAGS,
-  frameworkToken,
   type GlobalFlags,
   route,
   scanGlobalFlags,
@@ -53,11 +45,6 @@ const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
 
 /** Keys of the result envelope that command data may not use. */
 const RESERVED_KEYS = ['ok', 'error', 'next']
-
-/** Global flags that built-in commands ignore; each built-in decides about `--help`. */
-const BUILTIN_IGNORED_FLAGS = FRAMEWORK_FLAGS.filter(
-  (flag) => flag.global && flag.name !== 'help'
-)
 
 /** The outcome of a command that printed text, such as help. */
 const TEXT_OUTCOME: Outcome = {
@@ -119,6 +106,9 @@ export function defineCli(definition: CliOptions): Cli {
   }
   if (!defines('schema')) {
     commands.push(schemaCommand(options, root))
+  }
+  if (!defines('completion')) {
+    commands.push(completionCommand(options))
   }
   const envPrefix = (options.envPrefix ?? options.name)
     .toUpperCase()
@@ -257,9 +247,6 @@ class Invocation {
         this.#groupHelp = groupHelp(cli, routed.group, routed.path, true)
         throw unknownCommand(cli, routed)
       }
-      if (routed.kind === 'builtin') {
-        return await this.#completion(routed.rest)
-      }
       const { node, path } = routed
       if (node.kind === 'group') {
         if (flags.help || mode.format === 'human') {
@@ -337,37 +324,6 @@ class Invocation {
     return await this.#finish(this.#checked(result, cliError.data), extras)
   }
 
-  /** Handles the built-in `completion` command. */
-  async #completion(rest: string[]): Promise<Outcome> {
-    const { cli, mode, flags } = this.#state
-    const words = builtinWords(rest, 'completion', ['--help', '-h'])
-    if (flags.help || (words.length === 0 && mode.format === 'human')) {
-      return await this.#text(completionHelp(cli.name))
-    }
-    const shell = words[0]
-    if (words.length !== 1 || !isShell(shell)) {
-      throw new CliError({
-        code: 'invalid_input',
-        message: `Expected one shell: ${SHELLS.join(', ')}.`,
-        details: [
-          {
-            path: 'shell',
-            source: 'positional',
-            message: `Expected one of ${SHELLS.join(', ')}`,
-          },
-        ],
-        next: [
-          {
-            by: 'user',
-            command: `${cli.name} completion --help`,
-            description: 'Show how to install completions',
-          },
-        ],
-      })
-    }
-    return await this.#text(completionScript(cli.name, shell))
-  }
-
   /** Writes text such as help to stdout and returns a successful outcome. */
   async #text(text: string): Promise<Outcome> {
     await this.#state.session.text(text)
@@ -441,6 +397,9 @@ class Invocation {
       }
     }
     const human = command.human ?? formatData
+    if (checked.ok && printsPlainText(command)) {
+      return await this.#text(human(data) ?? '')
+    }
     return await this.#finish(checked, {
       human: checked.ok ? human(data) : undefined,
     })
@@ -642,38 +601,6 @@ function missingCommand(
       },
     ],
   })
-}
-
-/**
- * Returns the words given to a built-in command, skipping framework flags
- * and rejecting flags the built-in does not accept.
- */
-function builtinWords(
-  rest: string[],
-  name: string,
-  accepted: string[]
-): string[] {
-  const words: string[] = []
-  for (let index = 0; index < rest.length; index++) {
-    const arg = rest[index] as string
-    const token = frameworkToken(arg, BUILTIN_IGNORED_FLAGS)
-    if (token === 'value') {
-      index++ // its value was read by the mode resolution
-      continue
-    }
-    if (token || accepted.includes(arg)) {
-      continue
-    }
-    if (arg.startsWith('-')) {
-      throw new CliError({
-        code: 'invalid_input',
-        message: `Unknown flag ${arg} for ${name}.`,
-        details: [{ path: arg, source: 'flag', message: 'Unknown flag' }],
-      })
-    }
-    words.push(arg)
-  }
-  return words
 }
 
 /** Lists each input value and its source for `--debug`, redacting secrets. */

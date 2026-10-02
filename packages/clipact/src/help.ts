@@ -5,13 +5,13 @@ import {
   type Group,
   isBuiltin,
 } from './define.ts'
+import { FRAMEWORK_FLAGS, type FrameworkFlag, flagTokens } from './route.ts'
 import {
-  BUILTINS,
-  FRAMEWORK_FLAGS,
-  type FrameworkFlag,
-  flagTokens,
-} from './route.ts'
-import type { CommandSpec, FieldSpec, JsonSchema } from './spec.ts'
+  type CommandSpec,
+  type FieldSpec,
+  type JsonSchema,
+  resolveSpec,
+} from './spec.ts'
 
 /** The output contract, repeated in agent help. */
 const CONTRACT =
@@ -65,13 +65,17 @@ function valueLabel(field: FieldSpec): string {
   return `<${kind === 'unknown' ? 'value' : kind}>`
 }
 
+/** Returns the positional placeholders of a command, such as `<path>` and `[tags...]`. */
+function positionalUsage(spec: CommandSpec): string[] {
+  return spec.positionals.map((field) => {
+    const name = field.variadic ? `${field.name}...` : field.name
+    return field.required ? `<${name}>` : `[${name}]`
+  })
+}
+
 /** Returns the usage line for a command. */
 export function usage(cli: CliOptions, spec: CommandSpec): string {
-  const parts = [cli.name, spec.path]
-  for (const field of spec.positionals) {
-    const name = field.variadic ? `${field.name}...` : field.name
-    parts.push(field.required ? `<${name}>` : `[${name}]`)
-  }
+  const parts = [cli.name, spec.path, ...positionalUsage(spec)]
   for (const field of spec.fields) {
     if (!(field.positional || field.secret) && field.required) {
       parts.push(`--${field.flag} ${valueLabel(field)}`)
@@ -235,14 +239,18 @@ export function groupHelp(
   })
   sections.push(`Commands:\n${columns(rows)}`)
   if (isRoot) {
-    sections.push(
-      `Built-in:\n${columns(
-        Object.values(BUILTINS).map(({ usage, description }) => [
-          usage,
-          description,
-        ])
-      )}`
-    )
+    const builtins = group.commands
+      .filter((node) => node.kind === 'command' && isBuiltin(node))
+      .map((command): [string, string] => [
+        [
+          command.name,
+          ...positionalUsage(resolveSpec(command as AnyCommand, command.name)),
+        ].join(' '),
+        command.description,
+      ])
+    if (builtins.length > 0) {
+      sections.push(`Built-in:\n${columns(builtins)}`)
+    }
   }
   if (agent) {
     sections.push(

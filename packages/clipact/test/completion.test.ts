@@ -171,8 +171,28 @@ describe('completion', () => {
     const flag = assertContract(await invoke(cli, ['completion', '--list']))
     assert.equal(
       (flag.error as { message: string }).message,
-      'Unknown flag --list for completion.'
+      '--list: Unknown flag.'
     )
+  })
+
+  test('is described by schema but stays out of command lists', async () => {
+    const own = assertContract(await invoke(cli, ['schema', 'completion']))
+    assert.deepEqual(own.positionals, ['shell'])
+    assert.equal(own.readOnly, true)
+    const list = assertContract(await invoke(cli, ['schema', '--list']))
+    assert.ok(
+      !(list.commands as { command: string }[]).some(
+        (entry) => entry.command === 'completion'
+      )
+    )
+  })
+
+  test('prints the script even with invalid framework variables', async () => {
+    const result = await invoke(cli, ['completion', 'bash'], {
+      env: { ACME_AGENT: 'maybe' },
+    })
+    assert.equal(result.exitCode, 0)
+    assert.match(result.stdout, /^# bash completion for acme/)
   })
 
   test('shows installation help to humans', async () => {
@@ -182,7 +202,7 @@ describe('completion', () => {
       assert.match(result.stdout, /source <\(acme completion zsh\)/)
     }
     const help = await invoke(cli, ['--help'], { tty: true })
-    assert.match(help.stdout, /completion <shell>/)
+    assert.match(help.stdout, /completion \[shell\]/)
   })
 
   // macOS ships bash 3.2 as /bin/bash, without mapfile or compopt.

@@ -1,12 +1,16 @@
 import {
   type AnyCommand,
   type CliOptions,
+  type Command,
+  defineCommand,
+  defineHandler,
   type Group,
   isBuiltin,
+  markBuiltin,
 } from './define.ts'
-import { DefinitionError } from './errors.ts'
+import { CliError, DefinitionError } from './errors.ts'
+import { fromJsonSchema } from './json-schema.ts'
 import {
-  BUILTINS,
   FRAMEWORK_FLAGS,
   type FrameworkFlag,
   findNode,
@@ -16,10 +20,10 @@ import {
 import { type CommandSpec, type FieldSpec, resolveSpec } from './spec.ts'
 
 /** Shells with a completion script. */
-export const SHELLS = ['bash', 'zsh', 'fish'] as const
+const SHELLS = ['bash', 'zsh', 'fish'] as const
 
 /** A shell supported by `completion`. */
-export type Shell = (typeof SHELLS)[number]
+type Shell = (typeof SHELLS)[number]
 
 /** The hidden built-in the completion scripts call on each Tab. */
 export const COMPLETE_COMMAND = '__complete'
@@ -77,11 +81,6 @@ function frameworkOptions(
   )
 }
 
-/** Returns `true` for a supported shell name. */
-export function isShell(value: string | undefined): value is Shell {
-  return SHELLS.includes(value as Shell)
-}
-
 /**
  * Answers the hidden `__complete` built-in: `words` are the arguments after
  * the binary name, the last being the word under the cursor. Returns one
@@ -123,13 +122,12 @@ function candidates(
   if (routed.kind === 'unknown') {
     return []
   }
-  const words = routed.rest.filter((arg) => !arg.startsWith('-'))
-  if (routed.kind === 'builtin') {
-    return words.length === 0 ? SHELLS.map((value) => ({ value })) : []
-  }
   const { node, path, rest } = routed
   if (isBuiltin(node) && node.name === 'schema' && !current.startsWith('-')) {
-    const target = findNode(root, words)
+    const target = findNode(
+      root,
+      rest.filter((arg) => !arg.startsWith('-'))
+    )
     return target?.kind === 'group' ? children(cli, target, false) : []
   }
   if (node.kind === 'group') {
@@ -154,12 +152,9 @@ function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
       list.push({ value: alias, description: `Alias for ${target}` })
     }
   }
-  for (const [name, { description }] of Object.entries(BUILTINS)) {
-    const shadowed = group.commands.some(
-      (child) => child.name === name && !isBuiltin(child)
-    )
-    if (!shadowed) {
-      list.push({ value: name, description })
+  for (const child of group.commands) {
+    if (isBuiltin(child)) {
+      list.push({ value: child.name, description: child.description })
     }
   }
   return list
@@ -347,8 +342,8 @@ complete -c ${name} -f -a '(__${id}_complete)'
 `
 }
 
-/** Help for the `completion` built-in, with installation steps. */
-export function completionHelp(name: string): string {
+/** Installation steps, printed by `completion` without a shell on a terminal. */
+function completionHelp(name: string): string {
   return `${name} completion: Print a shell completion script
 
 Usage:
@@ -361,4 +356,71 @@ Install:
 
 The script asks ${name} for candidates on each Tab, so it stays current after upgrades.
 `
+}
+
+/** Input of the built-in `completion` command. */
+interface CompletionInput {
+  shell?: Shell
+}
+
+const completionInput = fromJsonSchema<CompletionInput>({
+  type: 'object',
+  properties: {
+    shell: {
+      type: 'string',
+      enum: SHELLS,
+      description: 'Shell to print the script for',
+    },
+  },
+  additionalProperties: false,
+})
+
+/**
+ * Builds the built-in `completion` command. Its script is plain text in
+ * every mode, because `eval "$(acme completion bash)"` reads it from a pipe.
+ */
+export function completionCommand(
+  cli: CliOptions
+): Command<typeof completionInput, undefined> {
+  const command: Command<typeof completionInput, undefined> = defineCommand({
+    name: 'completion',
+    description: 'Print a bash, zsh, or fish completion script',
+    examples: [
+      `eval "$(${cli.name} completion bash)"`,
+      `source <(${cli.name} completion zsh)`,
+      `${cli.name} completion fish > ~/.config/fish/completions/${cli.name}.fish`,
+    ],
+    input: completionInput,
+    positionals: ['shell'],
+    readOnly: true,
+    human: (data) => String(data.text),
+    handler: async () => ({ default: handler }),
+  })
+  const handler = defineHandler(command, ({ input, mode, ok }) => {
+    if (input.shell) {
+      return ok({ text: completionScript(cli.name, input.shell) })
+    }
+    if (mode.format === 'human') {
+      return ok({ text: completionHelp(cli.name) })
+    }
+    throw new CliError({
+      code: 'invalid_input',
+      message: `Expected one shell: ${SHELLS.join(', ')}.`,
+      details: [
+        {
+          path: 'shell',
+          source: 'positional',
+          message: `Expected one of ${SHELLS.join(', ')}`,
+        },
+      ],
+      next: [
+        {
+          by: 'user',
+          command: `${cli.name} completion --help`,
+          description: 'Show how to install completions',
+        },
+      ],
+    })
+  })
+  return markBuiltin(command, { plainText: true })
 }
