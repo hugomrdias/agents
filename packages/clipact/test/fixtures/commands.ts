@@ -80,7 +80,7 @@ export const broken = defineCommand({
   name: 'broken',
   description: 'Return invalid output',
   input: z.strictObject({
-    kind: z.enum(['output', 'code', 'retryable', 'crash']),
+    kind: z.enum(['output', 'code', 'retryable', 'crash', 'data', 'bigint']),
   }),
   positionals: ['kind'],
   output: z.object({ ref: z.string() }),

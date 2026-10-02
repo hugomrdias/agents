@@ -308,7 +308,7 @@ class Invocation {
     } else if (cliError.code === 'invalid_input') {
       extras.help = this.#groupHelp
     }
-    return await this.#finish(this.#checked(result), extras)
+    return await this.#finish(this.#checked(result, cliError.data), extras)
   }
 
   /** Handles the built-in `schema` command. */
@@ -549,7 +549,7 @@ class Invocation {
   }
 }
 
-/** Builds an error result, applying the default `retryable` rules. */
+/** Builds an error result, applying the default `retryable` rules; data cannot override reserved keys. */
 function errorResult(
   error: CliError,
   command: AnyCommand | undefined
@@ -558,6 +558,7 @@ function errorResult(
     error.retryable ??
     (TRANSIENT_ERROR_CODES.has(error.code) &&
       Boolean(command?.readOnly || command?.idempotent))
+  const { ok: _ok, error: _error, next: _next, ...data } = error.data ?? {}
   return {
     ok: false,
     error: {
@@ -569,7 +570,7 @@ function errorResult(
         : { retryAfterSeconds: error.retryAfterSeconds }),
       ...(error.details === undefined ? {} : { details: error.details }),
     },
-    ...error.data,
+    ...data,
     ...(error.next?.length ? { next: error.next } : {}),
   }
 }

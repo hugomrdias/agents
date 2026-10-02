@@ -92,13 +92,16 @@ export class Session {
     if (this.#rendered) {
       return
     }
+    // Serialize first: if it throws, the error result can still be rendered.
+    const json =
+      this.mode.format === 'json' ? `${JSON.stringify(result)}\n` : undefined
     this.#rendered = true
     const error = result.error as
       | { code: string; message: string; details?: unknown }
       | undefined
     const next = result.next as Next[] | undefined
 
-    if (this.mode.format === 'json') {
+    if (json !== undefined) {
       if (error) {
         this.log(`${this.cli.name}: ${error.message}`)
         if (extras.help && this.mode.agent) {
@@ -106,7 +109,7 @@ export class Session {
         }
       }
       await this.#flushStderr()
-      await writeAsync(this.io.stdout, `${JSON.stringify(result)}\n`)
+      await writeAsync(this.io.stdout, json)
       return
     }
 

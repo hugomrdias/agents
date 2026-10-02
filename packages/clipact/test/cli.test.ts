@@ -760,3 +760,31 @@ describe('review fixes', () => {
     assert.equal(JSON.parse(human.stdout).command, 'artifacts get')
   })
 })
+
+describe('result integrity', () => {
+  test('error data cannot override reserved result keys', async () => {
+    const result = await invoke(cli, ['broken', 'data'], { strict: false })
+    const json = assertContract(result)
+    assert.equal(result.exitCode, 1)
+    assert.equal(json.ok, false)
+    assert.equal((json.error as { code: string }).code, 'timeout')
+    assert.equal(json.partial, 'kept')
+    assert.equal(json.next, undefined)
+    const strict = assertContract(await invoke(cli, ['broken', 'data']))
+    assert.equal(
+      (strict.error as { message: string }).message,
+      'Contract violation: output uses reserved keys: ok, error, next.'
+    )
+  })
+
+  test('a result that cannot be serialized becomes internal_error', async () => {
+    const result = await invoke(cli, ['broken', 'bigint'], { strict: false })
+    const json = assertContract(result)
+    assert.equal(result.exitCode, 1)
+    assert.equal((json.error as { code: string }).code, 'internal_error')
+    assert.match(
+      (json.error as { message: string }).message,
+      /serialize a BigInt/
+    )
+  })
+})
