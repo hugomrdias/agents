@@ -43,7 +43,7 @@ export interface RemovedCopy {
   name: string
   target: Target
   path: string
-  action: 'removed' | 'missing' | 'unmanaged'
+  action: 'removed' | 'missing' | 'unmanaged' | 'symlink'
   /** Files left in place because they were edited or added locally. */
   kept?: string[]
 }
@@ -150,7 +150,7 @@ const uninstallOutput = fromJsonSchema<{
   scope: Scope
   skills: RemovedCopy[]
 }>(
-  copiesOutput(['removed', 'missing', 'unmanaged'], {
+  copiesOutput(['removed', 'missing', 'unmanaged', 'symlink'], {
     kept: { type: 'array', items: string },
   })
 )

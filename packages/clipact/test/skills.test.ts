@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { defineCli } from '../src/index.ts'
 import {
   assertContract,
@@ -275,6 +276,13 @@ describe('skills status', () => {
       (result.skills as { scope: string }[]).map((copy) => copy.scope),
       ['global', 'global']
     )
+    assert.deepEqual(result.next, [
+      {
+        by: 'agent',
+        command: 'acme skills install --scope global',
+        description: 'Install the skills for every project',
+      },
+    ])
   })
 })
 
@@ -381,6 +389,26 @@ describe('stale skill notice', () => {
     const machine = await invoke(cli, ['artifacts', 'label', 'id1', 'a'])
     assert.equal(machine.stderr, '')
   })
+
+  test('stays quiet for a copy that install would refuse to write', async () => {
+    const outside = join(project, '..', 'outside')
+    await mkdir(join(outside, 'skills/acme'), { recursive: true })
+    await writeFile(
+      join(outside, 'skills/acme/.clipact.json'),
+      JSON.stringify({ cli: 'acme', version: '1.0.0', files: {} })
+    )
+    await symlink(outside, join(project, '.claude'))
+
+    const human = await invoke(cli, [
+      'artifacts',
+      'label',
+      'id1',
+      'a',
+      '--format',
+      'human',
+    ])
+    assert.doesNotMatch(human.stderr, /skill/)
+  })
 })
 
 describe('skills safety', () => {
@@ -437,11 +465,16 @@ describe('skills safety', () => {
         path: join(project, '.claude/skills/acme'),
         reason: 'symlink',
         files: [join(project, '.claude/skills/acme')],
+        resolvesTo: join(outside, 'skills/acme'),
       },
     ])
+    assert.match(
+      (json.error as { message: string }).message,
+      /\.claude\/skills\/acme resolves to .*outside\/skills\/acme, outside the current directory\.$/
+    )
     assert.deepEqual(
       (json.next as { command?: string }[]).map((step) => step.command),
-      [undefined]
+      [undefined, undefined, 'acme skills install --scope global']
     )
     assert.equal(await readFile(join(outside, 'errors.md'), 'utf8'), 'keep me')
     assert.deepEqual(await files(outside), ['errors.md'])
@@ -450,6 +483,86 @@ describe('skills safety', () => {
       (status.skills as { status: string }[]).map((copy) => copy.status),
       ['symlink', 'symlink']
     )
+  })
+
+  test('refuses a linked ~/.claude and suggests alternatives', async () => {
+    const dotfiles = join(home, '..', 'dotfiles')
+    await mkdir(join(dotfiles, '.claude'), { recursive: true })
+    await symlink(join(dotfiles, '.claude'), join(home, '.claude'))
+
+    const result = await invoke(cli, [
+      'skills',
+      'install',
+      '--scope',
+      'global',
+      '--target',
+      'claude',
+      '--force',
+    ])
+    const json = assertContract(result)
+    assert.deepEqual((json.error as { details: unknown }).details, [
+      {
+        name: 'acme',
+        target: 'claude',
+        path: join(home, '.claude/skills/acme'),
+        reason: 'symlink',
+        files: [join(home, '.claude/skills/acme')],
+        resolvesTo: join(dotfiles, '.claude/skills/acme'),
+      },
+    ])
+    assert.deepEqual(json.next, [
+      {
+        by: 'user',
+        description: `Copy the skills by hand from ${fileURLToPath(options.skills)}, or replace the linked directory with a real one; install never writes outside the home directory`,
+      },
+      {
+        by: 'user',
+        command: 'acme skills install --target claude',
+        description: 'Install into the project scope instead',
+      },
+    ])
+    assert.deepEqual(await files(dotfiles), [])
+  })
+
+  test('uninstall reports linked copies and skips missing ones', async () => {
+    const outside = join(project, '..', 'outside')
+    await mkdir(join(outside, 'skills/acme'), { recursive: true })
+    await writeFile(join(outside, 'skills/acme/SKILL.md'), 'mine')
+    await symlink(outside, join(project, '.claude'))
+    await mkdir(join(project, '..', 'empty'))
+    await symlink(join(project, '..', 'empty'), join(project, '.agents'))
+
+    const removed = await skills('uninstall')
+    assert.deepEqual(
+      (removed.skills as { action: string }[]).map((copy) => copy.action),
+      ['missing', 'symlink']
+    )
+    assert.equal(
+      await readFile(join(outside, 'skills/acme/SKILL.md'), 'utf8'),
+      'mine'
+    )
+  })
+
+  test('updates copies of read-only shipped files', async () => {
+    const source = join(project, '..', 'source')
+    await mkdir(join(source, 'tool'), { recursive: true })
+    await writeFile(join(source, 'tool/SKILL.md'), 'v1')
+    await chmod(join(source, 'tool/SKILL.md'), 0o444)
+    const readOnly = defineCli({ ...options, skills: source })
+    assertContract(
+      await invoke(readOnly, ['skills', 'install', '--target', 'claude'])
+    )
+
+    await chmod(join(source, 'tool/SKILL.md'), 0o644)
+    await writeFile(join(source, 'tool/SKILL.md'), 'v2')
+    await chmod(join(source, 'tool/SKILL.md'), 0o444)
+    const updated = assertContract(
+      await invoke(readOnly, ['skills', 'install', '--target', 'claude'])
+    )
+    assert.equal((updated.skills as { action: string }[])[0]?.action, 'updated')
+    const path = join(project, '.claude/skills/tool/SKILL.md')
+    assert.equal(await readFile(path, 'utf8'), 'v2')
+    assert.equal((await stat(path)).mode & 0o777, 0o444)
   })
 
   test('refuses to overwrite a local file the new version starts shipping', async () => {
