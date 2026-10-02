@@ -4,7 +4,7 @@
  * A step with `by: 'user'` is the action-required signal: the agent should
  * stop and relay it to a human.
  *
- * @see https://github.com/filoz/foc-cli/blob/main/docs/agent-cli-guidelines.md#errors-next-steps-and-retries
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#errors-next-steps-and-retries
  */
 export interface Next {
   by: 'agent' | 'user'

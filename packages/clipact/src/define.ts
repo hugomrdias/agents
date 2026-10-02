@@ -198,7 +198,7 @@ export interface CliOptions {
  * Defines a command. Handlers are loaded lazily, so this module should
  * import only the schema library.
  *
- * @see https://github.com/filoz/foc-cli/blob/main/docs/cli-framework-design.md#defining-commands
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/cli-framework-design.md#defining-commands
  */
 export function defineCommand<
   I extends Schema | undefined = undefined,

@@ -79,7 +79,7 @@ export interface Cli {
 /**
  * Defines a CLI from its command tree.
  *
- * @see https://github.com/filoz/foc-cli/blob/main/docs/cli-framework-design.md
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/cli-framework-design.md
  */
 export function defineCli(options: CliOptions): Cli {
   const root: Group = {

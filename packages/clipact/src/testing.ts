@@ -156,7 +156,7 @@ export function exec(
  * with a boolean `ok`, the exit code matches `ok`, stdout has no ANSI codes,
  * and stderr has no JSON results. Returns the parsed result.
  *
- * @see https://github.com/filoz/foc-cli/blob/main/docs/agent-cli-guidelines.md#output-contract
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#output-contract
  */
 export function assertContract(result: RunResult): Record<string, unknown> {
   const lines = result.stdout.split('\n')

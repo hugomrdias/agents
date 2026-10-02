@@ -15,7 +15,7 @@ function isFormat(value: string | undefined): value is Mode['format'] {
  * Invalid values are returned as issues and otherwise ignored, so
  * discovery commands still work.
  *
- * @see https://github.com/filoz/foc-cli/blob/main/docs/agent-cli-guidelines.md#streams-and-modes
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#streams-and-modes
  */
 export function resolveMode(
   flags: GlobalFlags,
