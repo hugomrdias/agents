@@ -12,5 +12,6 @@ export const cli = defineCli({
   envPrefix: 'LAUNCHPAD',
   commands: [sites, deploys, whoami],
   aliases: { deploy: 'deploys create', ls: 'sites list' },
+  skills: new URL('../skills/', import.meta.url),
   mapError: () => import('./map-error.ts'),
 })

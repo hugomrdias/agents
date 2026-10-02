@@ -1,6 +1,6 @@
 # CLI framework design
 
-Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md); services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `foc` and future CLIs get the output contract, agent behavior, and startup performance by default.
+Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md), along with shell completions and skills; the other services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `foc` and future CLIs get the output contract, agent behavior, and startup performance by default.
 
 ## Goals
 
@@ -213,7 +213,7 @@ Help is rendered from definitions in two styles:
 - **Progress**: `ctx.progress({ phase, message, data? })` takes structured objects from the start. It draws a spinner on a human TTY and writes a plain stderr line at most every 15 s in agent mode. A later NDJSON `--events` mode can emit the same objects without handler changes.
 - **Framework state**: a small file in the platform state directory holds only framework-owned state: the telemetry choice and whether its notice was shown. It is not a configuration layer for command input.
 - **Telemetry**: the framework decides enablement (`DO_NOT_TRACK`, `ACME_TELEMETRY`, the stored choice from `telemetry disable`), builds the event (command path, flag names, outcome, error code, duration, versions, agent, mode), shows the first-run notice, supports `ACME_TELEMETRY=log`, and hands the event to the application's lazily loaded sender after the result is written.
-- **Skills**: copies the package's `skills/` directory to project `.agents/skills` and `.claude/skills`, stamps the CLI version, keeps a hash manifest, and refuses to overwrite edits without `--force`.
+- **Skills** (implemented): copies each `skills/<name>/` directory of the package to `.agents/skills` and `.claude/skills` under the current or home directory, records the CLI version and file hashes in a `.clipact.json` manifest in each copy, and refuses to replace edited or unmanaged copies without `--force`. The commands are ordinary framework-defined commands, so help, `schema`, completions, `--dry-run`, and the output contract apply unchanged. `--target agents|claude` selects directories, because `--agent` is the framework's agent-mode flag.
 
 ## Testing
 
@@ -296,5 +296,5 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 
 1. **Core** (implemented): definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
 2. **Spike**: build `foc artifacts put` and `foc operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI.
-3. **Services**: telemetry, skills, gating and dry-run polish, startup budget in CI.
+3. **Services**: telemetry, gating and dry-run polish, startup budget in CI. Skills are implemented.
 4. **Later**: `--events`. Shell completions are implemented.

@@ -50,6 +50,9 @@ test('definitions are valid and every command has a schema', () => {
     'deploys status',
     'deploys resume',
     'whoami',
+    'skills install',
+    'skills status',
+    'skills uninstall',
   ])
 })
 

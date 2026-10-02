@@ -26,6 +26,7 @@ For a complete CLI that uses every feature, with esbuild bundling and the compil
   - [Long-running work and signals](#long-running-work-and-signals)
   - [Help and discovery](#help-and-discovery)
   - [Shell completions](#shell-completions)
+  - [Agent skills](#agent-skills)
   - [Built-in flags and variables](#built-in-flags-and-variables)
 - [API reference](#api-reference)
 - [Testing API](#testing-api)
@@ -370,6 +371,30 @@ On each Tab, the script runs the hidden `acme __complete <words…>`, which answ
 
 `acme completion` without a shell prints these installation steps for humans and returns `invalid_input` for machines. `__complete` prints one `value<TAB>description` line per candidate, or `:files` for file paths, and always exits `0`.
 
+### Agent skills
+
+Ship hand-written [Agent Skills](https://agentskills.io/specification) in the package as `skills/<name>/SKILL.md` and point `skills` at that directory:
+
+```ts
+defineCli({ name: 'acme', version: '1.0.0', commands, skills: new URL('../skills/', import.meta.url) })
+```
+
+This adds a `skills` group, listed in help, `schema`, and completions like any other commands:
+
+| Command | Behavior |
+| --- | --- |
+| `acme skills install [--scope project\|global] [--target agents\|claude]… [--force] [--dry-run]` | Copies each bundled skill to `.agents/skills/<name>/` and `.claude/skills/<name>/` under the current directory, or under the home directory with `--scope global`. Idempotent: an up-to-date copy is `unchanged`. |
+| `acme skills status [--scope project\|global]` | Reports every copy in both scopes, or one, as `missing`, `current`, `stale` (another version or different content), `edited`, or `unmanaged`, with the version that installed it. |
+| `acme skills uninstall [--scope …] [--target …] [--dry-run]` | Removes the files `install` wrote that were not edited since, and lists the files it `kept`. |
+
+Each installed directory gets a `.clipact.json` manifest with the CLI name, version, and a SHA-256 of every file. `install` refuses to replace a directory with edited files or without a manifest (written by hand or by another tool) and returns `skill_conflict` with a `by: "user"` step to rerun with `--force`; it checks every directory before writing any. Nothing is installed as a side effect of other commands. After a command in human mode, the CLI prints one stderr line when a project copy was installed by another version:
+
+```text
+acme: the installed "acme" skill is from version 0.9.0; run "acme skills install" to update it.
+```
+
+The root can define its own `skills` command or group instead, in which case the built-in one is not added.
+
 ### Built-in flags and variables
 
 | Flag | Where | Effect |
@@ -412,6 +437,7 @@ Creates a CLI from its command tree.
 | `envPrefix` | `string?` | Prefix of framework variables. Defaults to the name. |
 | `commands` | `CommandNode[]` | Top-level commands and groups. |
 | `aliases` | `Record<string, string>?` | Extra paths for canonical paths, such as `{ publish: 'artifacts put' }`. Multi-word aliases are allowed; help, `schema`, and errors use the canonical path. |
+| `skills` | `URL \| string`? | Directory of bundled skills (`<name>/SKILL.md`); adds the [`skills` commands](#agent-skills). |
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
 
 The returned `Cli`:
@@ -420,7 +446,7 @@ The returned `Cli`:
 | --- | --- |
 | `run(argv = process.argv): Promise<void>` | Runs with the real process: installs signal, EPIPE, and crash handlers, sets `process.exitCode`, and re-raises an interrupting signal. Slices the first two `argv` entries. |
 | `execute(args, io, options?): Promise<Outcome>` | Runs one invocation against injected streams without touching the process. `args` excludes `node` and the script. Used by `invoke`. |
-| `options` | The `CliOptions` given to `defineCli`. |
+| `options` | The `CliOptions` given to `defineCli`, with the `skills` group appended to `commands` when `skills` is set. |
 | `envPrefix` | The resolved prefix, such as `ACME`. |
 
 `ExecuteOptions`: `signal?: AbortSignal` (abort with a signal name such as `'SIGTERM'` as the reason to interrupt), `crash?: Promise<never>` (rejects with an uncaught error), `strict?: boolean` (contract checks). `Outcome`: `{ exitCode: 0 | 1, result, signal }`, where `result` is the result object (undefined for help and version) and `signal` is the signal to re-raise.
@@ -558,7 +584,7 @@ Unbundled, the same CLI costs 27–33 ms, mostly from loading zod's modules. Bun
 
 ## Not yet implemented
 
-From the [design](../../docs/cli-framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), `skills install|status|uninstall`, a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
+From the [design](../../docs/cli-framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
 
 ## Development
 

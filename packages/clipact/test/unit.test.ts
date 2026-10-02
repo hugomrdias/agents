@@ -7,6 +7,7 @@ import {
   defineCommand,
   detectAgent,
 } from '../src/index.ts'
+import { fromJsonSchema } from '../src/json-schema.ts'
 import { resolveSpec } from '../src/spec.ts'
 import { invoke } from '../src/testing.ts'
 
@@ -138,5 +139,52 @@ describe('progress', () => {
       { env: { ACME_PRIVATE_KEY: 'k', AI_AGENT: 'codex' }, tty: true }
     )
     assert.equal(result.stderr, 'acme: upload: Uploading a\n')
+  })
+})
+
+describe('fromJsonSchema', () => {
+  const schema = fromJsonSchema({
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      mode: { type: 'string', enum: ['a', 'b'], default: 'a' },
+      tags: { type: 'array', items: { type: 'string' }, default: [] },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  })
+
+  test('applies defaults without sharing them between results', async () => {
+    const first = await schema['~standard'].validate({ name: 'x' })
+    assert.deepEqual(first, { value: { name: 'x', mode: 'a', tags: [] } })
+    const second = await schema['~standard'].validate({ name: 'y' })
+    assert.notEqual(
+      (first as { value: { tags: unknown } }).value.tags,
+      (second as { value: { tags: unknown } }).value.tags
+    )
+  })
+
+  test('reports every issue with its path', async () => {
+    const result = await schema['~standard'].validate({
+      mode: 'c',
+      tags: ['ok', 1],
+      extra: true,
+    })
+    assert.deepEqual(result, {
+      issues: [
+        { message: 'Unknown field', path: ['extra'] },
+        { message: 'Required', path: ['name'] },
+        { message: 'Expected one of: a, b', path: ['mode'] },
+        { message: 'Expected a string', path: ['tags', 1] },
+      ],
+    })
+  })
+
+  test('exports the same schema as draft 2020-12', () => {
+    const json = schema['~standard'].jsonSchema.input({
+      target: 'draft-2020-12',
+    })
+    assert.equal(json.$schema, 'https://json-schema.org/draft/2020-12/schema')
+    assert.deepEqual(json.required, ['name'])
   })
 })

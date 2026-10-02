@@ -31,7 +31,7 @@ import {
 } from './errors.ts'
 import { commandHelp, groupHelp, leaves, usage } from './help.ts'
 import { type FrameworkValues, resolveInput } from './input.ts'
-import { type Io, processIo } from './io.ts'
+import { type Io, processIo, writeAsync } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
   closest,
@@ -46,6 +46,7 @@ import {
   type ResultObject,
   Session,
 } from './session.ts'
+import { skillsGroup } from './skills.ts'
 import { type CommandSpec, resolveSpec } from './spec.ts'
 
 /** Signals that cancel the running command. */
@@ -89,7 +90,18 @@ export interface Cli {
  *
  * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/cli-framework-design.md
  */
-export function defineCli(options: CliOptions): Cli {
+export function defineCli(definition: CliOptions): Cli {
+  const options: CliOptions =
+    definition.skills &&
+    !definition.commands.some((node) => node.name === 'skills')
+      ? {
+          ...definition,
+          commands: [
+            ...definition.commands,
+            skillsGroup(definition, definition.skills),
+          ],
+        }
+      : definition
   const root: Group = {
     kind: 'group',
     name: options.name,
@@ -270,7 +282,9 @@ class Invocation {
           details: this.#state.modeIssues,
         })
       }
-      return await this.#command(spec, routed.consumed)
+      const outcome = await this.#command(spec, routed.consumed)
+      await this.#skillsNotice(path)
+      return outcome
     } catch (error) {
       return await this.fail(error)
     }
@@ -466,6 +480,26 @@ class Invocation {
           : formatData(data)
         : undefined,
     })
+  }
+
+  /** After a human-mode command, suggests updating project skills installed by another version. */
+  async #skillsNotice(path: string[]): Promise<void> {
+    const { cli, mode, io } = this.#state
+    if (!cli.skills || mode.format !== 'human' || mode.agent) {
+      return
+    }
+    if (path[0] === 'skills') {
+      return
+    }
+    try {
+      const { staleNotice } = await import('./skills.run.ts')
+      const notice = await staleNotice(cli, cli.skills)
+      if (notice) {
+        await writeAsync(io.stderr, `${notice}\n`)
+      }
+    } catch {
+      // A notice never changes the outcome.
+    }
   }
 
   /** Requires confirmation from a human or `--yes` when the command asks for it. */

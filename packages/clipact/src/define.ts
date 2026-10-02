@@ -190,6 +190,13 @@ export interface CliOptions {
   commands: CommandNode[]
   /** Extra paths that resolve to a canonical command path, such as `{ publish: 'artifacts put' }`. */
   aliases?: Record<string, string>
+  /**
+   * Directory of bundled skills (`<name>/SKILL.md`), such as
+   * `new URL('../skills/', import.meta.url)`; adds the `skills` commands.
+   *
+   * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#agent-skills
+   */
+  skills?: URL | string
   /** Lazily imports a module that default-exports a {@link MapError} function. */
   mapError?: () => Promise<{ default: MapError }>
 }

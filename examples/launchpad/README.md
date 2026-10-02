@@ -37,6 +37,7 @@ Mock knobs, read only by the fake SDK: `LAUNCHPAD_HOME` (state directory, defaul
 | `deploys status <deployment>` | A `next` step that depends on state |
 | `deploys resume <deployment>` | Finishing an interrupted deployment from its persisted record |
 | `whoami` | `ctx.mode`: detected agent, format, and interactivity |
+| `skills install\|status\|uninstall` | The framework's [skills commands](../../packages/clipact/README.md#agent-skills), installing [`skills/launchpad/SKILL.md`](skills/launchpad/SKILL.md) into `.agents/skills` and `.claude/skills` |
 
 Every API command shares the `token` and `team` fields from [`src/commands/shared.ts`](src/commands/shared.ts): `token` is a secret read only from `LAUNCHPAD_TOKEN`, and `team` falls back to `LAUNCHPAD_TEAM`. There are no global options or middleware; [`src/handlers/client.ts`](src/handlers/client.ts) is a plain function each handler calls.
 
