@@ -1,5 +1,13 @@
 import { createInterface } from 'node:readline/promises'
 import {
+  COMPLETE_COMMAND,
+  complete,
+  completionHelp,
+  completionScript,
+  isShell,
+  SHELLS,
+} from './completion.ts'
+import {
   type AnyCommand,
   type Checkpoint,
   type CliOptions,
@@ -222,6 +230,10 @@ class Invocation {
   async run(): Promise<Outcome> {
     const { cli, root, args, flags, session, mode } = this.#state
     try {
+      if (args[0] === COMPLETE_COMMAND) {
+        await session.text(complete(cli, root, args.slice(1)))
+        return { exitCode: 0, result: undefined, signal: undefined }
+      }
       const routed = route(root, args, cli.aliases)
       if (flags.version) {
         await session.text(`${cli.version}\n`)
@@ -231,8 +243,10 @@ class Invocation {
         this.#groupHelp = groupHelp(cli, routed.group, routed.path, true)
         throw unknownCommand(cli, routed)
       }
-      if (routed.kind === 'schema') {
-        return await this.#schema(routed.consumed)
+      if (routed.kind === 'builtin') {
+        return routed.name === 'schema'
+          ? await this.#schema(routed.consumed)
+          : await this.#completion(routed.consumed)
       }
       const { node, path } = routed
       if (node.kind === 'group') {
@@ -314,26 +328,7 @@ class Invocation {
   /** Handles the built-in `schema` command. */
   async #schema(consumed: number[]): Promise<Outcome> {
     const { cli, root, args, session, mode } = this.#state
-    const rest = args.filter((_, index) => !consumed.includes(index))
-    const words: string[] = []
-    for (let index = 0; index < rest.length; index++) {
-      const arg = rest[index] as string
-      if (arg === '--format') {
-        index++ // its value was read by the mode resolution
-        continue
-      }
-      if (arg === '--list' || isFrameworkToken(arg)) {
-        continue
-      }
-      if (arg.startsWith('-')) {
-        throw new CliError({
-          code: 'invalid_input',
-          message: `Unknown flag ${arg} for schema.`,
-          details: [{ path: arg, source: 'flag', message: 'Unknown flag' }],
-        })
-      }
-      words.push(arg)
-    }
+    const words = builtinWords(args, consumed, 'schema', ['--list'])
     const node = words.length > 0 ? findNode(root, words) : undefined
     if (words.length > 0 && !node) {
       throw unknownCommand(cli, {
@@ -361,6 +356,39 @@ class Invocation {
       result: result as ResultObject,
       signal: undefined,
     }
+  }
+
+  /** Handles the built-in `completion` command. */
+  async #completion(consumed: number[]): Promise<Outcome> {
+    const { cli, args, session, mode, flags } = this.#state
+    const words = builtinWords(args, consumed, 'completion', ['--help', '-h'])
+    if (flags.help || (words.length === 0 && mode.format === 'human')) {
+      await session.text(completionHelp(cli.name))
+      return { exitCode: 0, result: undefined, signal: undefined }
+    }
+    const shell = words[0]
+    if (words.length !== 1 || !isShell(shell)) {
+      throw new CliError({
+        code: 'invalid_input',
+        message: `Expected one shell: ${SHELLS.join(', ')}.`,
+        details: [
+          {
+            path: 'shell',
+            source: 'positional',
+            message: `Expected one of ${SHELLS.join(', ')}`,
+          },
+        ],
+        next: [
+          {
+            by: 'user',
+            command: `${cli.name} completion --help`,
+            description: 'Show how to install completions',
+          },
+        ],
+      })
+    }
+    await session.text(completionScript(cli.name, shell))
+    return { exitCode: 0, result: undefined, signal: undefined }
   }
 
   /** Validates input, applies the confirmation gate, and runs the handler. */
@@ -638,7 +666,40 @@ function missingCommand(
   })
 }
 
-/** Returns `true` for framework flags that `schema` ignores. */
+/**
+ * Returns the words given to a built-in command, skipping framework flags
+ * and rejecting flags the built-in does not accept.
+ */
+function builtinWords(
+  args: string[],
+  consumed: number[],
+  name: string,
+  accepted: string[]
+): string[] {
+  const rest = args.filter((_, index) => !consumed.includes(index))
+  const words: string[] = []
+  for (let index = 0; index < rest.length; index++) {
+    const arg = rest[index] as string
+    if (arg === '--format') {
+      index++ // its value was read by the mode resolution
+      continue
+    }
+    if (accepted.includes(arg) || isFrameworkToken(arg)) {
+      continue
+    }
+    if (arg.startsWith('-')) {
+      throw new CliError({
+        code: 'invalid_input',
+        message: `Unknown flag ${arg} for ${name}.`,
+        details: [{ path: arg, source: 'flag', message: 'Unknown flag' }],
+      })
+    }
+    words.push(arg)
+  }
+  return words
+}
+
+/** Returns `true` for framework flags that built-in commands ignore. */
 function isFrameworkToken(arg: string): boolean {
   return (
     ['--json', '--agent', '--no-agent', '--debug'].includes(arg) ||

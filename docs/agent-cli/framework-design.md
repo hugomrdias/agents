@@ -34,7 +34,7 @@ Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/cl
 bin/acme.js            entry shim: enableCompileCache, then import('../dist/main.js')
 dist/main.js           defineCli({...}).run(process.argv)  ← manifest only (definitions + schemas)
   ├─ runtime           route → parse → validate → gate → handler → render → exit
-  ├─ built-ins         --help, --version, schema, skills, telemetry
+  ├─ built-ins         --help, --version, schema, completion, skills, telemetry
   └─ handlers          import('./commands/artifacts/put.run.js') only when that command runs
 ```
 
@@ -203,6 +203,7 @@ Help is rendered from definitions in two styles:
 | `--yes`, `--dry-run`, `--input <file\|->` | Gating and input, when the command supports them |
 | `--debug` | Stack traces, each input value's source (secrets redacted), and telemetry errors on stderr |
 | `schema [command…]`, `schema --list` | JSON Schema for input, output, and errors, with positionals, environment variable names, and secret fields; the command tree |
+| `completion bash\|zsh\|fish` | A shell script that asks the hidden `__complete <words…>` built-in for candidates on each Tab |
 | `skills install\|status\|uninstall` | Install the bundled skill per the guidelines, when `skills` is configured |
 | `telemetry status\|enable\|disable` | Telemetry controls, when `telemetry` is configured |
 
@@ -289,11 +290,11 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 | Describing side effects | Generic `readOnly`, `idempotent`, and `confirm` (reason string or function) instead of an `effects` enum | Business categories such as “paid” belong to the application; the framework needs only what drives confirmation and retry classification. |
 | Automatic retries | Not implemented in the framework | Handlers and SDKs own I/O and request-level backoff; re-running a whole handler repeats work, extends harness-visible duration, and can duplicate side effects. |
 | MCP | Not supported | stdio MCP adds no capability over the CLI for shell-capable agents; remote MCP needs hosting, OAuth, and an upload design. |
-| Shell completions | Deferred | Not used by agents; static completions can be generated from definitions later without design changes. |
+| Shell completions | Dynamic: `completion <shell>` prints a short bash, zsh, or fish script that calls the hidden `__complete` built-in on each Tab | Candidates come from the same definitions as help and are never stale after an upgrade; the logic lives once in TypeScript and is tested with the Node test runner instead of three generated shell programs. `__complete` takes the metadata path, so a Tab costs about as much as `--version`. Not used by agents. |
 
 ## Milestones
 
 1. **Core** (implemented): definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
 2. **Spike**: build `foc artifacts put` and `foc operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI.
 3. **Services**: telemetry, skills, gating and dry-run polish, startup budget in CI.
-4. **Later**: `--events`, static shell completions.
+4. **Later**: `--events`. Shell completions are implemented.

@@ -223,6 +223,7 @@ export function groupHelp(
           'schema [command...]',
           'JSON Schema for a command, or the command list',
         ],
+        ['completion <shell>', 'Print a bash, zsh, or fish completion script'],
       ])}`
     )
   }

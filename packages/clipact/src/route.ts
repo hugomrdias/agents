@@ -17,6 +17,12 @@ const BOOLEAN_FLAGS = new Set([
   '--dry-run',
 ])
 
+/** Built-in commands at the root, unless the root defines a command with the same name. */
+export const BUILTINS = ['schema', 'completion'] as const
+
+/** The name of a built-in command. */
+export type Builtin = (typeof BUILTINS)[number]
+
 /** Framework flags that decide the mode and fast paths, scanned before parsing. */
 export interface GlobalFlags {
   json: boolean
@@ -36,7 +42,7 @@ interface Word {
 /** The result of routing argv through the command tree. */
 export type Route =
   | { kind: 'node'; node: CommandNode; path: string[]; consumed: number[] }
-  | { kind: 'schema'; consumed: number[] }
+  | { kind: 'builtin'; name: Builtin; consumed: number[] }
   | {
       kind: 'unknown'
       group: Group
@@ -128,7 +134,7 @@ export function findNode(root: Group, path: string[]): CommandNode | undefined {
 
 /**
  * Routes leading positional words through groups until a command is
- * reached, resolving aliases and the built-in `schema` command at the root.
+ * reached, resolving aliases and the built-in commands at the root.
  */
 export function route(
   root: Group,
@@ -161,12 +167,14 @@ export function route(
   }
 
   const first = words[0]
+  const builtin = BUILTINS.find((name) => name === first?.value)
   if (
     position === 0 &&
-    first?.value === 'schema' &&
-    !root.commands.some((child) => child.name === 'schema')
+    first &&
+    builtin &&
+    !root.commands.some((child) => child.name === builtin)
   ) {
-    return { kind: 'schema', consumed: [first.index] }
+    return { kind: 'builtin', name: builtin, consumed: [first.index] }
   }
 
   while (node.kind === 'group' && position < words.length) {

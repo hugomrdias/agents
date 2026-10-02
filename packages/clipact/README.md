@@ -25,6 +25,7 @@ For a complete CLI that uses every feature, with esbuild bundling and the compil
   - [Errors](#errors)
   - [Long-running work and signals](#long-running-work-and-signals)
   - [Help and discovery](#help-and-discovery)
+  - [Shell completions](#shell-completions)
   - [Built-in flags and variables](#built-in-flags-and-variables)
 - [API reference](#api-reference)
 - [Testing API](#testing-api)
@@ -315,6 +316,7 @@ Listeners are registered with `process.once`, so a second signal terminates imme
 | `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, side effects |
 | `acme schema --list` | `{ ok, name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], aliases }` |
 | `acme schema <command>` | `{ ok, command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors, aliases }`, where `input` and `output` are JSON Schema 2020-12 and `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }` |
+| `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
 None of these load handlers, read credentials, or touch the network. In human mode, `schema` pretty-prints its JSON. A group run without a subcommand prints its help for humans and returns `invalid_input` listing its commands for machines. An unknown command suggests the closest name:
 
@@ -346,6 +348,28 @@ Output is one JSON object on stdout; exit code 0 when "ok" is true, else 1.
 Full schema: acme schema artifacts get
 ```
 
+### Shell completions
+
+`acme completion bash|zsh|fish` prints a short script. Install it once:
+
+```sh
+# bash 3.2+ (~/.bashrc)
+eval "$(acme completion bash)"
+# zsh (~/.zshrc, after compinit)
+source <(acme completion zsh)
+# fish
+acme completion fish > ~/.config/fish/completions/acme.fish
+```
+
+On each Tab, the script runs the hidden `acme __complete <words…>`, which answers from the definitions without loading handlers, so completions always match the installed version. It completes:
+
+- commands, groups, single-word aliases, and the `schema` and `completion` built-ins, with descriptions in zsh and fish;
+- a command's flags, except positional fields, secrets, and flags already given (array flags repeat), followed by the framework flags;
+- values of `--flag value` and `--flag=value` from the field's `enum`, file paths for string fields and `--input`, and nothing for numbers;
+- positionals the same way, in order, then flags once every positional is filled.
+
+`acme completion` without a shell prints these installation steps for humans and returns `invalid_input` for machines. `__complete` prints one `value<TAB>description` line per candidate, or `:files` for file paths, and always exits `0`.
+
 ### Built-in flags and variables
 
 | Flag | Where | Effect |
@@ -360,7 +384,7 @@ Full schema: acme schema artifacts get
 | `--yes` | Commands with `confirm` | Skip the confirmation |
 | `--dry-run` | Commands with `dryRun` | Set `ctx.dryRun` and skip the confirmation |
 
-Input fields cannot use these names (`json`, `format`, `agent`, `input`, `yes`, `dryRun`, `debug`, `help`, `version`), and the root cannot define a `schema` command without replacing the built-in one.
+Input fields cannot use these names (`json`, `format`, `agent`, `input`, `yes`, `dryRun`, `debug`, `help`, `version`), and the root cannot define a `schema` or `completion` command without replacing the built-in one.
 
 | Variable | Values | Effect |
 | --- | --- | --- |
@@ -534,7 +558,7 @@ Unbundled, the same CLI costs 27–33 ms, mostly from loading zod's modules. Bun
 
 ## Not yet implemented
 
-From the [design](../../docs/cli-framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), `skills install|status|uninstall`, a startup-budget check in CI, NDJSON `--events`, and shell completions. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
+From the [design](../../docs/cli-framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), `skills install|status|uninstall`, a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
 
 ## Development
 
