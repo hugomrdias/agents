@@ -117,9 +117,6 @@ function sideEffects(command: AnyCommand): string[] {
       'May require confirmation depending on input; pass --yes when not interactive.'
     )
   }
-  if (command.dryRun) {
-    lines.push('Supports --dry-run.')
-  }
   return lines
 }
 
