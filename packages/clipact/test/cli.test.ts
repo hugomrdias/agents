@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { describe, test } from 'node:test'
 import {
   assertContract,
@@ -699,5 +699,64 @@ describe('input hardening', () => {
     })
     assertContract(result)
     assert.match(result.stderr, /Commands:\n {2}artifacts put/)
+  })
+})
+
+describe('review fixes', () => {
+  test('switches with a value are rejected, so --yes=false never approves', async () => {
+    const result = await invoke(cli, ['artifacts', 'put', 'a', '--yes=false'], {
+      env: { ...KEY, ACME_NETWORK: 'mainnet' },
+    })
+    const error = assertContract(result).error as {
+      code: string
+      details: unknown
+    }
+    assert.equal(error.code, 'invalid_input')
+    assert.deepEqual(error.details, [
+      { path: '--yes', source: 'flag', message: '--yes does not take a value' },
+    ])
+    for (const flag of ['--dry-run=0', '--debug=1', '--json=true']) {
+      const other = await invoke(cli, ['artifacts', 'put', 'a', flag], {
+        env: KEY,
+      })
+      assert.equal(
+        (assertContract(other).error as { code: string }).code,
+        'invalid_input',
+        flag
+      )
+    }
+  })
+
+  test('decodes multi-byte characters split across stdin chunks', async () => {
+    const bytes = Buffer.from(JSON.stringify({ path: 'café' }))
+    const split = bytes.indexOf(0xc3) + 1 // between the two bytes of "é"
+    const stdin = Readable.from([
+      bytes.subarray(0, split),
+      bytes.subarray(split),
+    ])
+    const result = await invoke(cli, ['artifacts', 'put', '--input', '-'], {
+      env: KEY,
+      stdin,
+    })
+    assert.equal(assertContract(result).url, 'https://example.com/café')
+  })
+
+  test('schema accepts --format with a separate value', async () => {
+    for (const args of [
+      ['schema', '--format', 'json'],
+      ['schema', '--format', 'json', 'artifacts', 'get'],
+      ['--format', 'json', 'schema', 'artifacts', 'get'],
+    ]) {
+      const result = await invoke(cli, args)
+      assert.equal(assertContract(result).ok, true, args.join(' '))
+    }
+    const human = await invoke(cli, [
+      'schema',
+      'artifacts',
+      'get',
+      '--format',
+      'human',
+    ])
+    assert.equal(JSON.parse(human.stdout).command, 'artifacts get')
   })
 })

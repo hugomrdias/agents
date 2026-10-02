@@ -316,7 +316,12 @@ class Invocation {
     const { cli, root, args, session, mode } = this.#state
     const rest = args.filter((_, index) => !consumed.includes(index))
     const words: string[] = []
-    for (const arg of rest) {
+    for (let index = 0; index < rest.length; index++) {
+      const arg = rest[index] as string
+      if (arg === '--format') {
+        index++ // its value was read by the mode resolution
+        continue
+      }
       if (arg === '--list' || isFrameworkToken(arg)) {
         continue
       }
@@ -636,7 +641,7 @@ function missingCommand(
 function isFrameworkToken(arg: string): boolean {
   return (
     ['--json', '--agent', '--no-agent', '--debug'].includes(arg) ||
-    arg.startsWith('--format')
+    arg.startsWith('--format=')
   )
 }
 

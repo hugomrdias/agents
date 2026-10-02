@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { StringDecoder } from 'node:string_decoder'
 import { parseArgs } from 'node:util'
 import type { Env } from './agent.ts'
 import { CliError, type InputIssue } from './errors.ts'
@@ -181,6 +182,16 @@ function parseCommandArgs(
           path: token.rawName,
           source: 'flag',
           message: 'Unknown flag',
+        })
+      } else if (
+        frameworkOptions[token.name]?.type === 'boolean' &&
+        token.value !== undefined
+      ) {
+        // `--yes=false` must not approve anything; switches take no value.
+        issues.push({
+          path: token.rawName,
+          source: 'flag',
+          message: `${token.rawName} does not take a value`,
         })
       } else if (frameworkOptions[token.name]?.type === 'string') {
         if (token.value === undefined) {
@@ -489,9 +500,11 @@ function readStream(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     signal.throwIfAborted()
+    // Decodes across chunk boundaries so split multi-byte characters survive.
+    const decoder = new StringDecoder('utf8')
     let text = ''
     const onData = (chunk: string | Buffer) => {
-      text += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+      text += typeof chunk === 'string' ? chunk : decoder.write(chunk)
     }
     const cleanup = () => {
       stream.off('data', onData)
@@ -501,7 +514,7 @@ function readStream(
     }
     const onEnd = () => {
       cleanup()
-      resolve(text)
+      resolve(text + decoder.end())
     }
     const onError = (error: Error) => {
       cleanup()
