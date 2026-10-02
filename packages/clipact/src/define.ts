@@ -231,6 +231,23 @@ export function defineCommand<
   }) as Command<I, O>
 }
 
+/** Framework commands routed like any other but kept out of command lists. */
+const BUILTIN_NODES = new WeakSet<CommandNode>()
+
+/**
+ * Marks a framework-owned command as built-in: it is listed under "Built-in"
+ * in root help instead of with the application's commands.
+ */
+export function markBuiltin<T extends CommandNode>(node: T): T {
+  BUILTIN_NODES.add(node)
+  return node
+}
+
+/** Returns `true` for a command marked with {@link markBuiltin}. */
+export function isBuiltin(node: CommandNode): boolean {
+  return BUILTIN_NODES.has(node)
+}
+
 /** Defines a group of commands, such as `artifacts` in `acme artifacts put`. */
 export function defineGroup(options: Omit<Group, 'kind'>): Group {
   return Object.freeze({ kind: 'group', ...options })

@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { describe, test } from 'node:test'
 import {
+  type Command,
+  defineCli,
+  defineCommand,
+  defineHandler,
+} from '../src/index.ts'
+import {
   assertContract,
   assertDefinitions,
   invoke,
@@ -559,6 +565,81 @@ describe('discovery', () => {
     assert.deepEqual(put.confirm, { when: 'conditional' })
     assert.deepEqual(put.aliases, ['publish'])
     assert.equal((put.input as { type: string }).type, 'object')
+  })
+
+  test('schema shows help like any command', async () => {
+    for (const flag of ['--help', '-h']) {
+      const result = await invoke(cli, ['schema', flag])
+      assert.equal(result.exitCode, 0, flag)
+      assert.match(result.stdout, /^acme schema: JSON Schema for a command/)
+      assert.match(
+        result.stdout,
+        /Usage:\n {2}acme schema \[command\.\.\.\] \[flags\]/
+      )
+      assert.match(result.stdout, /--list/)
+    }
+  })
+
+  test('schema describes itself but stays out of command lists', async () => {
+    const own = assertContract(await invoke(cli, ['schema', 'schema']))
+    assert.equal(own.command, 'schema')
+    assert.deepEqual(own.positionals, ['command'])
+    assert.equal(own.readOnly, true)
+    const list = assertContract(await invoke(cli, ['schema']))
+    assert.ok(
+      !(list.commands as { command: string }[]).some((c) =>
+        c.command.startsWith('schema')
+      )
+    )
+    const help = await invoke(cli, ['--help'])
+    const commands = help.stdout.split('Built-in:')[0] as string
+    assert.doesNotMatch(commands, /^ {2}schema/m)
+    assert.match(help.stdout, /Built-in:\n {2}schema \[command\.\.\.\]/)
+  })
+
+  test('schema prints one JSON object, pretty in human mode', async () => {
+    const json = await invoke(cli, ['schema', 'artifacts', 'get'])
+    assert.equal(json.stdout.trim().split('\n').length, 1)
+    assert.equal(json.stderr, '')
+    const human = await invoke(cli, [
+      'schema',
+      'artifacts',
+      'get',
+      '--format',
+      'human',
+    ])
+    assert.equal(human.stdout, `${JSON.stringify(json.json, null, 2)}\n`)
+  })
+
+  test('schema rejects unknown commands and flags', async () => {
+    const unknown = assertContract(await invoke(cli, ['schema', 'nope']))
+    assert.equal(
+      (unknown.error as { message: string }).message,
+      'Unknown command "acme nope".'
+    )
+    const flag = assertContract(await invoke(cli, ['schema', '--yes']))
+    assert.equal((flag.error as { code: string }).code, 'invalid_input')
+  })
+
+  test('a CLI command named schema replaces the built-in', async () => {
+    const command: Command = defineCommand({
+      name: 'schema',
+      description: 'Custom schema',
+      handler: async () => ({
+        default: defineHandler(command, ({ ok }) => ok({ custom: true })),
+      }),
+    })
+    const custom = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+    })
+    assert.deepEqual(assertContract(await invoke(custom, ['schema'])), {
+      ok: true,
+      custom: true,
+    })
+    const help = await invoke(custom, ['--help'])
+    assert.match(help.stdout, /Commands:\n {2}schema +Custom schema/)
   })
 
   test('schema works with invalid framework variables', async () => {

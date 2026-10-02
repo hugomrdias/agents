@@ -13,18 +13,18 @@ import {
   type Context,
   createOk,
   type Group,
+  isBuiltin,
   isHandler,
   isOk,
   type Mode,
   type Schema,
 } from './define.ts'
-import { commandSchema, listSchema } from './discovery.ts'
+import { schemaCommand } from './discovery.ts'
 import {
   CliError,
   DefinitionError,
   type InputIssue,
   isCliError,
-  type Next,
   TRANSIENT_ERROR_CODES,
 } from './errors.ts'
 import { commandHelp, groupHelp, leaves, usage } from './help.ts'
@@ -32,14 +32,12 @@ import { type FrameworkValues, invalidInput, resolveInput } from './input.ts'
 import { type Io, processIo } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
-  closest,
   FRAMEWORK_FLAGS,
-  findNode,
   frameworkToken,
   type GlobalFlags,
-  type Route,
   route,
   scanGlobalFlags,
+  unknownCommand,
 } from './route.ts'
 import {
   formatData,
@@ -106,22 +104,21 @@ export interface Cli {
  * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/cli-framework-design.md
  */
 export function defineCli(definition: CliOptions): Cli {
-  const options: CliOptions =
-    definition.skills &&
-    !definition.commands.some((node) => node.name === 'skills')
-      ? {
-          ...definition,
-          commands: [
-            ...definition.commands,
-            skillsGroup(definition, definition.skills),
-          ],
-        }
-      : definition
+  const defines = (name: string) =>
+    definition.commands.some((node) => node.name === name)
+  const commands = [...definition.commands]
+  const options: CliOptions = { ...definition, commands }
   const root: Group = {
     kind: 'group',
     name: options.name,
     description: options.description ?? '',
-    commands: options.commands,
+    commands,
+  }
+  if (definition.skills && !defines('skills')) {
+    commands.push(skillsGroup(definition, definition.skills))
+  }
+  if (!defines('schema')) {
+    commands.push(schemaCommand(options, root))
   }
   const envPrefix = (options.envPrefix ?? options.name)
     .toUpperCase()
@@ -261,9 +258,7 @@ class Invocation {
         throw unknownCommand(cli, routed)
       }
       if (routed.kind === 'builtin') {
-        return routed.name === 'schema'
-          ? await this.#schema(routed.rest)
-          : await this.#completion(routed.rest)
+        return await this.#completion(routed.rest)
       }
       const { node, path } = routed
       if (node.kind === 'group') {
@@ -280,11 +275,14 @@ class Invocation {
       if (flags.help) {
         return await this.#text(commandHelp(cli, spec, Boolean(mode.agent)))
       }
-      if (this.#state.modeIssues.length > 0) {
+      // Built-ins print the same JSON in every mode, so they ignore mode issues.
+      if (this.#state.modeIssues.length > 0 && !isBuiltin(node)) {
         throw invalidInput(this.#state.modeIssues)
       }
       const outcome = await this.#command(spec, routed.rest)
-      await this.#skillsNotice(path)
+      if (!isBuiltin(node)) {
+        await this.#skillsNotice(path)
+      }
       return outcome
     } catch (error) {
       return await this.fail(error)
@@ -337,34 +335,6 @@ class Invocation {
       extras.help = spec ? commandHelp(cli, spec, true) : this.#groupHelp
     }
     return await this.#finish(this.#checked(result, cliError.data), extras)
-  }
-
-  /** Handles the built-in `schema` command. */
-  async #schema(rest: string[]): Promise<Outcome> {
-    const { cli, root, mode } = this.#state
-    const words = builtinWords(rest, 'schema', ['--list'])
-    const node = findNode(root, words)
-    if (!node) {
-      throw unknownCommand(cli, {
-        kind: 'unknown',
-        group: root,
-        path: [],
-        word: words.join(' '),
-        suggestion: closest(
-          words.join(' '),
-          leaves(root).map((leaf) => leaf.path)
-        ),
-      })
-    }
-    const result =
-      node.kind === 'command'
-        ? commandSchema(cli, resolveSpec(node, words.join(' ')))
-        : listSchema(cli, node, words)
-    const indent = mode.format === 'human' ? 2 : undefined
-    const outcome = await this.#text(
-      `${JSON.stringify(result, null, indent)}\n`
-    )
-    return { ...outcome, result: result as ResultObject }
   }
 
   /** Handles the built-in `completion` command. */
@@ -650,35 +620,6 @@ function contractViolation(message: string): ResultObject {
     }),
     undefined
   )
-}
-
-/** Builds the error for an unknown command word. */
-function unknownCommand(
-  cli: CliOptions,
-  routed: Extract<Route, { kind: 'unknown' }>
-): CliError {
-  const attempted = [cli.name, ...routed.path, routed.word].join(' ')
-  const next: Next[] = []
-  if (routed.suggestion) {
-    next.push({
-      by: 'agent',
-      command: [cli.name, ...routed.path, routed.suggestion, '--help'].join(
-        ' '
-      ),
-      description: `Show help for "${routed.suggestion}"`,
-    })
-  }
-  next.push({
-    by: 'agent',
-    command: `${cli.name} schema --list`,
-    description: 'List all commands',
-  })
-  return new CliError({
-    code: 'invalid_input',
-    message: `Unknown command "${attempted}".${routed.suggestion ? ` Did you mean "${routed.suggestion}"?` : ''}`,
-    retryable: false,
-    next,
-  })
 }
 
 /** Builds the error for a group invoked without a subcommand in machine mode. */

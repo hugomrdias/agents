@@ -1,4 +1,10 @@
-import type { AnyCommand, CliOptions, CommandNode, Group } from './define.ts'
+import {
+  type AnyCommand,
+  type CliOptions,
+  type CommandNode,
+  type Group,
+  isBuiltin,
+} from './define.ts'
 import {
   BUILTINS,
   FRAMEWORK_FLAGS,
@@ -17,14 +23,14 @@ export interface Leaf {
   command: AnyCommand
 }
 
-/** Lists every command below `node` with its path, depth first. */
+/** Lists every command below `node` with its path, depth first, skipping built-ins. */
 export function leaves(node: CommandNode, prefix: string[] = []): Leaf[] {
   if (node.kind === 'command') {
     return [{ path: prefix.join(' '), command: node }]
   }
-  return node.commands.flatMap((child) =>
-    leaves(child, [...prefix, child.name])
-  )
+  return node.commands
+    .filter((child) => !isBuiltin(child))
+    .flatMap((child) => leaves(child, [...prefix, child.name]))
 }
 
 /** Formats rows as two aligned columns. */

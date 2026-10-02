@@ -1,8 +1,12 @@
-import type { AnyCommand, CliOptions, Group } from './define.ts'
+import {
+  type AnyCommand,
+  type CliOptions,
+  type Group,
+  isBuiltin,
+} from './define.ts'
 import { DefinitionError } from './errors.ts'
 import {
   BUILTINS,
-  builtins,
   FRAMEWORK_FLAGS,
   type FrameworkFlag,
   findNode,
@@ -119,18 +123,15 @@ function candidates(
   if (routed.kind === 'unknown') {
     return []
   }
+  const words = routed.rest.filter((arg) => !arg.startsWith('-'))
   if (routed.kind === 'builtin') {
-    const words = routed.rest.filter((arg) => !arg.startsWith('-'))
-    if (routed.name === 'completion') {
-      return words.length === 0 ? SHELLS.map((value) => ({ value })) : []
-    }
-    if (current.startsWith('-')) {
-      return [{ value: '--list', description: 'List all commands' }]
-    }
-    const node = findNode(root, words)
-    return node?.kind === 'group' ? children(cli, node, false) : []
+    return words.length === 0 ? SHELLS.map((value) => ({ value })) : []
   }
   const { node, path, rest } = routed
+  if (isBuiltin(node) && node.name === 'schema' && !current.startsWith('-')) {
+    const target = findNode(root, words)
+    return target?.kind === 'group' ? children(cli, target, false) : []
+  }
   if (node.kind === 'group') {
     if (current.startsWith('-')) {
       return flagCandidates(frameworkOptions(undefined, path.length === 0), [])
@@ -142,10 +143,9 @@ function candidates(
 
 /** Lists the commands of a group, with aliases and built-ins at the root. */
 function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
-  const list: Candidate[] = group.commands.map((child) => ({
-    value: child.name,
-    description: child.description,
-  }))
+  const list: Candidate[] = group.commands
+    .filter((child) => !isBuiltin(child))
+    .map((child) => ({ value: child.name, description: child.description }))
   if (!isRoot) {
     return list
   }
@@ -154,8 +154,13 @@ function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
       list.push({ value: alias, description: `Alias for ${target}` })
     }
   }
-  for (const name of builtins(group)) {
-    list.push({ value: name, description: BUILTINS[name].description })
+  for (const [name, { description }] of Object.entries(BUILTINS)) {
+    const shadowed = group.commands.some(
+      (child) => child.name === name && !isBuiltin(child)
+    )
+    if (!shadowed) {
+      list.push({ value: name, description })
+    }
   }
   return list
 }

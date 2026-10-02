@@ -1,5 +1,5 @@
-import type { AnyCommand, CommandNode, Group } from './define.ts'
-import { DefinitionError } from './errors.ts'
+import type { AnyCommand, CliOptions, CommandNode, Group } from './define.ts'
+import { CliError, DefinitionError, type Next } from './errors.ts'
 
 /** A flag owned by the framework rather than a command's input. */
 export interface FrameworkFlag {
@@ -96,7 +96,10 @@ export function frameworkToken(
   return undefined
 }
 
-/** Built-in commands at the root, unless the root defines a command with the same name. */
+/**
+ * Built-in commands, as shown in root help and completion. `schema` is a
+ * hidden command in the tree; the router handles the others itself.
+ */
 export const BUILTINS = {
   schema: {
     usage: 'schema [command...]',
@@ -111,7 +114,7 @@ export const BUILTINS = {
 /** The name of a built-in command. */
 export type Builtin = keyof typeof BUILTINS
 
-/** Returns the built-in commands that the root does not shadow. */
+/** Returns the built-ins the router handles: those without a node of the same name at the root. */
 export function builtins(root: Group): Builtin[] {
   return (Object.keys(BUILTINS) as Builtin[]).filter(
     (name) => !root.commands.some((child) => child.name === name)
@@ -292,6 +295,35 @@ export function route(
     position++
   }
   return { kind: 'node', node, path, rest: without(args, consumed) }
+}
+
+/** Builds the error for an unknown command word. */
+export function unknownCommand(
+  cli: CliOptions,
+  routed: Extract<Route, { kind: 'unknown' }>
+): CliError {
+  const attempted = [cli.name, ...routed.path, routed.word].join(' ')
+  const next: Next[] = []
+  if (routed.suggestion) {
+    next.push({
+      by: 'agent',
+      command: [cli.name, ...routed.path, routed.suggestion, '--help'].join(
+        ' '
+      ),
+      description: `Show help for "${routed.suggestion}"`,
+    })
+  }
+  next.push({
+    by: 'agent',
+    command: `${cli.name} schema --list`,
+    description: 'List all commands',
+  })
+  return new CliError({
+    code: 'invalid_input',
+    message: `Unknown command "${attempted}".${routed.suggestion ? ` Did you mean "${routed.suggestion}"?` : ''}`,
+    retryable: false,
+    next,
+  })
 }
 
 /** Returns `args` without the given indexes. */

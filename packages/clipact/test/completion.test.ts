@@ -129,7 +129,11 @@ describe('__complete', () => {
   test('completes built-in commands', async () => {
     assert.deepEqual(await values('completion', ''), ['bash', 'zsh', 'fish'])
     assert.deepEqual(await values('schema', 'artifacts', 'g'), ['get'])
-    assert.deepEqual(await values('schema', '--'), ['--list'])
+    assert.deepEqual((await values('schema', '--')).slice(0, 3), [
+      '--list',
+      '--input',
+      '--json',
+    ])
   })
 
   test('prints nothing for unknown commands and ignores --help and --version', async () => {
