@@ -58,9 +58,9 @@ describe('process', () => {
 describe('process stdin', () => {
   test('SIGTERM while waiting for --input on an open stdin ends the process', async () => {
     const result = await exec(BIN, ['artifacts', 'put', '--input', '-'], {
-      env: { ACME_PRIVATE_KEY: 'k' },
+      env: { ACME_PRIVATE_KEY: 'k', ACME_TEST_READY: '1' },
       keepStdinOpen: true,
-      kill: { signal: 'SIGTERM', afterMs: 300 },
+      kill: { signal: 'SIGTERM', when: 'signal handlers ready' },
       timeoutMs: 5000,
     })
     assert.equal(result.signal, 'SIGTERM')
