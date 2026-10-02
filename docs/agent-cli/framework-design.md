@@ -7,13 +7,13 @@ Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/cl
 - Every guideline is the default behavior, not something each command remembers: one JSON result on stdout, human diagnostics on stderr, exit codes `0`/`1`, structured errors with `retryable` and `next`, agent detection, offline `schema`, no prompts without a human, signal and exit hygiene.
 - One command definition drives parsing, validation, help, JSON Schema, and types.
 - Metadata commands (`--help`, `--version`, `schema`) never import handlers or SDKs.
-- Small enough to own: roughly 1,500–2,000 lines and at most two runtime dependencies.
+- Small enough to own: roughly 3,000 lines and at most two runtime dependencies.
 
 ## Non-goals
 
 - Output formats other than JSON and human text (no YAML, TOON, Markdown).
 - MCP servers or adapters, OpenAPI mounting, standalone binaries, and self-update.
-- Interactive UI beyond a confirmation and a text prompt.
+- Interactive UI beyond a yes/no confirmation.
 - Generating skills from help text; skills are hand-written and shipped in the package.
 
 ## Decisions

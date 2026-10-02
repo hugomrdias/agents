@@ -180,7 +180,7 @@ Detection changes presentation only:
 | --- | --- | --- |
 | Default format | `human` on a terminal | `json`, even in a PTY |
 | Color and status lines | On a TTY (respecting `NO_COLOR` and `FORCE_COLOR`) | Off |
-| Prompts | When stdin and stdout are TTYs and `CI` is unset | Never |
+| Prompts | When stdin and stdout are TTYs and no agent or `CI` is detected | Never |
 | Help | Narrative with global flags | Examples first, output fields, error codes, side effects, `schema` pointer |
 | Usage errors | Usage line on stderr | Full command help (or group help, for an unknown or missing subcommand) on stderr, then the JSON result |
 | Progress | Rewritten status line | A plain line at most every 15 s |
