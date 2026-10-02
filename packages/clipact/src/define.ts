@@ -238,6 +238,11 @@ interface BuiltinOptions {
    * instead of a JSON result, such as a shell script read by `eval`.
    */
   plainText?: boolean
+  /**
+   * The input field whose positional words are a command path, such as
+   * `schema <group> <command>`; completion offers command names for it.
+   */
+  commandPath?: string
 }
 
 /** Framework commands routed like any other but kept out of command lists. */
@@ -263,6 +268,11 @@ export function isBuiltin(node: CommandNode): boolean {
 /** Returns `true` for a built-in whose successful result is plain text. */
 export function printsPlainText(node: CommandNode): boolean {
   return BUILTIN_NODES.get(node)?.plainText === true
+}
+
+/** Returns the input field of a built-in whose positionals are a command path. */
+export function commandPathField(node: CommandNode): string | undefined {
+  return BUILTIN_NODES.get(node)?.commandPath
 }
 
 /** Defines a group of commands, such as `artifacts` in `acme artifacts put`. */

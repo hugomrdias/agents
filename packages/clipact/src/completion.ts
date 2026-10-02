@@ -2,6 +2,7 @@ import {
   type AnyCommand,
   type CliOptions,
   type Command,
+  commandPathField,
   defineCommand,
   defineHandler,
   type Group,
@@ -123,20 +124,19 @@ function candidates(
     return []
   }
   const { node, path, rest } = routed
-  if (isBuiltin(node) && node.name === 'schema' && !current.startsWith('-')) {
-    const target = findNode(
-      root,
-      rest.filter((arg) => !arg.startsWith('-'))
-    )
-    return target?.kind === 'group' ? children(cli, target, false) : []
-  }
   if (node.kind === 'group') {
     if (current.startsWith('-')) {
       return flagCandidates(frameworkOptions(undefined, path.length === 0), [])
     }
     return children(cli, node, path.length === 0)
   }
-  return commandCandidates(resolveSpec(node, path.join(' ')), rest, current)
+  return commandCandidates(
+    cli,
+    root,
+    resolveSpec(node, path.join(' ')),
+    rest,
+    current
+  )
 }
 
 /** Lists the commands of a group, with aliases and built-ins at the root. */
@@ -162,6 +162,8 @@ function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
 
 /** Lists candidates within a command: flag values, flags, or positionals. */
 function commandCandidates(
+  cli: CliOptions,
+  root: Group,
   spec: CommandSpec,
   rest: string[],
   current: string
@@ -169,14 +171,14 @@ function commandCandidates(
   const options = commandOptions(spec)
   const byFlag = new Map(options.map((option) => [option.flag, option]))
   const used: string[] = []
-  let positional = 0
+  const positionals: string[] = []
   let pending: Option | undefined
   let terminated = false
   for (const arg of rest) {
     if (pending) {
       pending = undefined
     } else if (terminated || arg === '-' || !arg.startsWith('-')) {
-      positional++
+      positionals.push(arg)
     } else if (arg === '--') {
       terminated = true
     } else {
@@ -205,7 +207,13 @@ function commandCandidates(
   }
   const last = spec.positionals.at(-1)
   const field =
-    spec.positionals[positional] ?? (last?.variadic ? last : undefined)
+    spec.positionals[positionals.length] ?? (last?.variadic ? last : undefined)
+  if (field && field.name === commandPathField(spec.command)) {
+    // The words given so far for this field, such as a group name.
+    const words = positionals.slice(spec.positionals.indexOf(field))
+    const target = findNode(root, words)
+    return target?.kind === 'group' ? children(cli, target, false) : []
+  }
   if (field) {
     return fieldValues(field)
   }
