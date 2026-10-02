@@ -8,7 +8,7 @@ import {
   detectAgent,
 } from '../src/index.ts'
 import { fromJsonSchema } from '../src/json-schema.ts'
-import { resolveSpec } from '../src/spec.ts'
+import { resolveSpec, toFlag } from '../src/spec.ts'
 import { invoke } from '../src/testing.ts'
 
 const noop = () => Promise.resolve({})
@@ -103,6 +103,17 @@ describe('definitions', () => {
         }),
       /clashes with the framework flag --dry-run/,
     ],
+    [
+      'two fields with one flag',
+      () =>
+        defineCommand({
+          name: 'x',
+          description: '',
+          input: z.object({ rpcUrl: z.string(), rpcURL: z.string() }),
+          handler: noop,
+        }),
+      /fields "rpcUrl" and "rpcURL" both use --rpc-url/,
+    ],
   ]
   for (const [name, create, message] of cases) {
     test(`resolveSpec rejects ${name}`, () => {
@@ -127,6 +138,17 @@ describe('definitions', () => {
     assert.match(
       (result.json?.error as { message: string } | undefined)?.message ?? '',
       /field "help" clashes with the framework flag --help/
+    )
+  })
+})
+
+describe('toFlag', () => {
+  test('splits camelCase and keeps acronyms as one word', () => {
+    assert.deepEqual(
+      ['privateKey', 'rpcURL', 'chainID', 'URLPath', 'v2Name', 'name'].map(
+        toFlag
+      ),
+      ['private-key', 'rpc-url', 'chain-id', 'url-path', 'v2-name', 'name']
     )
   })
 })

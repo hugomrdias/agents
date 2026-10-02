@@ -60,9 +60,15 @@ export const EMPTY_INPUT: Schema = fromJsonSchema({
   additionalProperties: false,
 })
 
-/** Converts `privateKey` to `private-key`. */
+/**
+ * Converts a camelCase field name to a flag name: `privateKey` to
+ * `private-key`, and acronyms as one word, `rpcURL` to `rpc-url`.
+ */
 export function toFlag(name: string): string {
-  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase()
 }
 
 const cache = new WeakMap<AnyCommand, CommandSpec>()
@@ -168,6 +174,13 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
       throw new DefinitionError(
         path,
         `field "${field.name}" clashes with the framework flag --${field.flag}`
+      )
+    }
+    const other = byFlag.get(field.flag)
+    if (other) {
+      throw new DefinitionError(
+        path,
+        `fields "${other.name}" and "${field.name}" both use --${field.flag}`
       )
     }
     byFlag.set(field.flag, field)
