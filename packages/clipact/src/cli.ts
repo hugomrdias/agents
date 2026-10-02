@@ -31,7 +31,7 @@ import {
 } from './errors.ts'
 import { commandHelp, groupHelp, leaves, usage } from './help.ts'
 import { type FrameworkValues, resolveInput } from './input.ts'
-import { type Io, processIo, writeAsync } from './io.ts'
+import { type Io, processIo } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
   closest,
@@ -484,7 +484,7 @@ class Invocation {
 
   /** After a human-mode command, suggests updating project skills installed by another version. */
   async #skillsNotice(path: string[]): Promise<void> {
-    const { cli, mode, io } = this.#state
+    const { cli, mode, session } = this.#state
     if (!cli.skills || mode.format !== 'human' || mode.agent) {
       return
     }
@@ -495,7 +495,8 @@ class Invocation {
       const { staleNotice } = await import('./skills.run.ts')
       const notice = await staleNotice(cli, cli.skills)
       if (notice) {
-        await writeAsync(io.stderr, `${notice}\n`)
+        session.log(notice)
+        await session.flush()
       }
     } catch {
       // A notice never changes the outcome.

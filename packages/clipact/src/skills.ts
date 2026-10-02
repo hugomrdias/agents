@@ -6,6 +6,7 @@ import {
   defineCommand,
   defineGroup,
   type Group,
+  type Handler,
 } from './define.ts'
 import { fromJsonSchema, type JsonSchemaNode } from './json-schema.ts'
 
@@ -34,10 +35,7 @@ export interface InstalledCopy {
 }
 
 /** Input of `skills uninstall`. */
-export interface UninstallInput {
-  scope: Scope
-  target: Target[]
-}
+export type UninstallInput = Omit<InstallInput, 'force'>
 
 /** One copy reported by `skills uninstall`. */
 export interface RemovedCopy {
@@ -60,7 +58,7 @@ export interface CopyStatus {
   scope: Scope
   target: Target
   path: string
-  status: 'missing' | 'unmanaged' | 'current' | 'stale' | 'edited'
+  status: 'missing' | 'unmanaged' | 'symlink' | 'current' | 'stale' | 'edited'
   /** CLI version that installed the copy. */
   version?: string
 }
@@ -82,8 +80,45 @@ const target: JsonSchemaNode = {
     'Skills directories: agents (.agents/skills) and claude (.claude/skills)',
 }
 
-const name: JsonSchemaNode = { type: 'string' }
-const path: JsonSchemaNode = { type: 'string' }
+const string: JsonSchemaNode = { type: 'string' }
+const scopeName: JsonSchemaNode = { type: 'string', enum: SCOPES }
+const targetName: JsonSchemaNode = { type: 'string', enum: TARGETS }
+
+/** A closed object schema whose fields are required unless listed in `optional`. */
+function object(
+  properties: Record<string, JsonSchemaNode>,
+  optional: string[] = []
+): JsonSchemaNode {
+  return {
+    type: 'object',
+    properties,
+    required: Object.keys(properties).filter((key) => !optional.includes(key)),
+    additionalProperties: false,
+  }
+}
+
+/** The output of `install` and `uninstall`: the scope and one entry per copy. */
+function copiesOutput(
+  actions: string[],
+  extra: Record<string, JsonSchemaNode> = {}
+): JsonSchemaNode {
+  return object({
+    scope: scopeName,
+    skills: {
+      type: 'array',
+      items: object(
+        {
+          name: string,
+          target: targetName,
+          path: string,
+          action: { type: 'string', enum: actions },
+          ...extra,
+        },
+        Object.keys(extra)
+      ),
+    },
+  })
+}
 
 const installInput = fromJsonSchema<Partial<InstallInput>, InstallInput>({
   type: 'object',
@@ -103,31 +138,7 @@ const installInput = fromJsonSchema<Partial<InstallInput>, InstallInput>({
 const installOutput = fromJsonSchema<{
   scope: Scope
   skills: InstalledCopy[]
-}>({
-  type: 'object',
-  properties: {
-    scope: { type: 'string', enum: SCOPES },
-    skills: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name,
-          target: { type: 'string', enum: TARGETS },
-          path,
-          action: {
-            type: 'string',
-            enum: ['installed', 'updated', 'unchanged'],
-          },
-        },
-        required: ['name', 'target', 'path', 'action'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['scope', 'skills'],
-  additionalProperties: false,
-})
+}>(copiesOutput(['installed', 'updated', 'unchanged']))
 
 const uninstallInput = fromJsonSchema<Partial<UninstallInput>, UninstallInput>({
   type: 'object',
@@ -138,29 +149,11 @@ const uninstallInput = fromJsonSchema<Partial<UninstallInput>, UninstallInput>({
 const uninstallOutput = fromJsonSchema<{
   scope: Scope
   skills: RemovedCopy[]
-}>({
-  type: 'object',
-  properties: {
-    scope: { type: 'string', enum: SCOPES },
-    skills: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name,
-          target: { type: 'string', enum: TARGETS },
-          path,
-          action: { type: 'string', enum: ['removed', 'missing', 'unmanaged'] },
-          kept: { type: 'array', items: path },
-        },
-        required: ['name', 'target', 'path', 'action'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['scope', 'skills'],
-  additionalProperties: false,
-})
+}>(
+  copiesOutput(['removed', 'missing', 'unmanaged'], {
+    kept: { type: 'array', items: string },
+  })
+)
 
 const statusInput = fromJsonSchema<StatusInput>({
   type: 'object',
@@ -170,33 +163,35 @@ const statusInput = fromJsonSchema<StatusInput>({
   additionalProperties: false,
 })
 
-const statusOutput = fromJsonSchema<{ version: string; skills: CopyStatus[] }>({
-  type: 'object',
-  properties: {
+const statusOutput = fromJsonSchema<{ version: string; skills: CopyStatus[] }>(
+  object({
     version: { type: 'string', description: 'Version of the running CLI' },
     skills: {
       type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name,
-          scope: { type: 'string', enum: SCOPES },
-          target: { type: 'string', enum: TARGETS },
-          path,
+      items: object(
+        {
+          name: string,
+          scope: scopeName,
+          target: targetName,
+          path: string,
           status: {
             type: 'string',
-            enum: ['missing', 'unmanaged', 'current', 'stale', 'edited'],
+            enum: [
+              'missing',
+              'unmanaged',
+              'symlink',
+              'current',
+              'stale',
+              'edited',
+            ],
           },
-          version: { type: 'string' },
+          version: string,
         },
-        required: ['name', 'scope', 'target', 'path', 'status'],
-        additionalProperties: false,
-      },
+        ['version']
+      ),
     },
-  },
-  required: ['version', 'skills'],
-  additionalProperties: false,
-})
+  })
+)
 
 /** The `skills install` command. */
 export type InstallCommand = Command<typeof installInput, typeof installOutput>
@@ -218,6 +213,11 @@ function display(path: string): string {
   }
   const home = homedir()
   return path.startsWith(`${home}${sep}`) ? `~${path.slice(home.length)}` : path
+}
+
+/** Loads a handler from `skills.run.ts` only when its command runs. */
+function lazy(create: (run: typeof import('./skills.run.ts')) => Handler) {
+  return async () => ({ default: create(await import('./skills.run.ts')) })
 }
 
 /**
@@ -243,9 +243,7 @@ export function skillsGroup(cli: CliOptions, source: URL | string): Group {
       data.skills
         .map((copy) => `${copy.action}: ${display(copy.path)}`)
         .join('\n'),
-    handler: async () => ({
-      default: (await import('./skills.run.ts')).install(cli, source, install),
-    }),
+    handler: lazy((run) => run.install(cli, source, install)),
   })
   const uninstall: UninstallCommand = defineCommand({
     name: 'uninstall',
@@ -262,13 +260,7 @@ export function skillsGroup(cli: CliOptions, source: URL | string): Group {
             `${copy.action}: ${display(copy.path)}${copy.kept ? ` (kept ${copy.kept.join(', ')})` : ''}`
         )
         .join('\n'),
-    handler: async () => ({
-      default: (await import('./skills.run.ts')).uninstall(
-        cli,
-        source,
-        uninstall
-      ),
-    }),
+    handler: lazy((run) => run.uninstall(cli, source, uninstall)),
   })
   const status: StatusCommand = defineCommand({
     name: 'status',
@@ -284,9 +276,7 @@ export function skillsGroup(cli: CliOptions, source: URL | string): Group {
             `${copy.status.padEnd(9)} ${display(copy.path)}${copy.version ? ` (${copy.version})` : ''}`
         )
         .join('\n'),
-    handler: async () => ({
-      default: (await import('./skills.run.ts')).status(cli, source, status),
-    }),
+    handler: lazy((run) => run.status(cli, source, status)),
   })
   return defineGroup({
     name: 'skills',

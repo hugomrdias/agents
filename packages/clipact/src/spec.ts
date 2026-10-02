@@ -1,5 +1,6 @@
 import type { AnyCommand, Schema } from './define.ts'
 import { DefinitionError } from './errors.ts'
+import { fromJsonSchema } from './json-schema.ts'
 
 /** A JSON Schema object as produced by Standard JSON Schema converters. */
 export type JsonSchema = Record<string, unknown>
@@ -61,41 +62,11 @@ export const FRAMEWORK_FLAGS = new Set([
 const JSON_SCHEMA_TARGET = { target: 'draft-2020-12' } as const
 
 /** Standard schema for commands without `input`: an empty object. */
-export const EMPTY_INPUT: Schema = {
-  '~standard': {
-    version: 1,
-    vendor: 'clipact',
-    validate(value) {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return { issues: [{ message: 'Expected an object' }] }
-      }
-      const keys = Object.keys(value)
-      if (keys.length > 0) {
-        return {
-          issues: keys.map((key) => ({
-            message: 'This command accepts no input',
-            path: [key],
-          })),
-        }
-      }
-      return { value: {} }
-    },
-    jsonSchema: {
-      input: () => ({
-        $schema: 'https://json-schema.org/draft/2020-12/schema',
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      }),
-      output: () => ({
-        $schema: 'https://json-schema.org/draft/2020-12/schema',
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      }),
-    },
-  },
-}
+export const EMPTY_INPUT: Schema = fromJsonSchema({
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+})
 
 /** Converts `privateKey` to `private-key`. */
 export function toFlag(name: string): string {

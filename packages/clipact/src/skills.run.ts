@@ -1,11 +1,13 @@
-import { createHash } from 'node:crypto'
 import {
   access,
+  chmod,
   mkdir,
   readdir,
   readFile,
+  realpath,
   rm,
   rmdir,
+  stat,
   writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -36,11 +38,18 @@ interface Manifest {
   files: Record<string, string>
 }
 
+/** A file shipped in a skill directory. */
+interface BundleFile {
+  content: Buffer
+  /** Permission bits, so shipped scripts stay executable. */
+  mode: number
+  hash: string
+}
+
 /** A skill directory shipped with the CLI. */
 interface Bundle {
   name: string
-  files: Map<string, Buffer>
-  hashes: Record<string, string>
+  files: Map<string, BundleFile>
 }
 
 /** An installed copy of a skill, as found on disk. */
@@ -48,11 +57,29 @@ interface Copy {
   name: string
   target: Target
   path: string
-  exists: boolean
-  /** Present only when this CLI installed the copy. */
+  /** Regular files on disk, as `/`-separated relative paths. */
+  files: string[]
+  /**
+   * Symbolic links inside the copy, or the copy's path when it resolves
+   * outside its scope's base directory. The CLI never writes through them.
+   */
+  links: string[]
+  /** Present only when this CLI installed the copy and it has no links. */
   manifest: Manifest | undefined
   /** Installed files that were changed or deleted since. */
   edited: string[]
+}
+
+/** What a copy is relative to the bundle it would be installed from. */
+type State = CopyStatus['status']
+
+/** Why `install` will not write a copy. */
+interface Conflict {
+  name: string
+  target: Target
+  path: string
+  reason: 'edited' | 'unmanaged' | 'symlink'
+  files?: string[]
 }
 
 /** Converts the `skills` option to a path. */
@@ -62,10 +89,14 @@ function sourcePath(source: URL | string): string {
     : fileURLToPath(source)
 }
 
+/** Returns the directory a scope installs under: the current or home directory. */
+function scopeBase(scope: Scope): string {
+  return scope === 'global' ? homedir() : process.cwd()
+}
+
 /** Returns the skills directory of a scope and target, such as `./.claude/skills`. */
 function skillsRoot(scope: Scope, target: Target): string {
-  const base = scope === 'global' ? homedir() : process.cwd()
-  return join(base, `.${target}`, 'skills')
+  return join(scopeBase(scope), `.${target}`, 'skills')
 }
 
 /** Returns `true` for a missing-file error. */
@@ -73,67 +104,141 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT'
 }
 
-/** Returns the SHA-256 of a file's content. */
+/**
+ * Returns the SHA-256 of a file's content. Loads `node:crypto` on first use,
+ * so the stale-skill notice never pays for it.
+ */
 function hash(content: Buffer): string {
+  const { createHash } = process.getBuiltinModule('node:crypto')
   return createHash('sha256').update(content).digest('hex')
 }
 
-/** Lists regular files below `dir` as sorted `/`-separated paths; empty when it does not exist. */
-async function listFiles(dir: string): Promise<string[]> {
+/** Returns the SHA-256 of a file, or `undefined` when it does not exist. */
+async function hashFile(path: string): Promise<string | undefined> {
   try {
-    const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-    return entries
-      .filter((entry) => entry.isFile())
-      .map((entry) =>
-        relative(dir, join(entry.parentPath, entry.name)).split(sep).join('/')
-      )
-      .sort()
+    return hash(await readFile(path))
   } catch (error) {
     if (isMissing(error)) {
-      return []
+      return undefined
     }
     throw error
   }
 }
 
-/** Lists the names of the directories in `source` that contain a `SKILL.md`. */
-async function bundleNames(source: string): Promise<string[]> {
-  const names: string[] = []
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      try {
-        await access(join(source, entry.name, 'SKILL.md'))
-        names.push(entry.name)
-      } catch {
-        // Not a skill directory.
+/**
+ * Lists the regular files and symbolic links below `dir` as sorted
+ * `/`-separated paths, without following links; empty when it does not exist.
+ */
+async function scan(
+  dir: string
+): Promise<{ files: string[]; links: string[] }> {
+  try {
+    const entries = await readdir(dir, { recursive: true, withFileTypes: true })
+    const paths = (keep: (entry: (typeof entries)[number]) => boolean) =>
+      entries
+        .filter(keep)
+        .map((entry) =>
+          relative(dir, join(entry.parentPath, entry.name)).split(sep).join('/')
+        )
+        .sort()
+    return {
+      files: paths((entry) => entry.isFile()),
+      links: paths((entry) => entry.isSymbolicLink()),
+    }
+  } catch (error) {
+    if (isMissing(error)) {
+      return { files: [], links: [] }
+    }
+    throw error
+  }
+}
+
+/**
+ * Returns `true` when `path`, or its nearest existing ancestor, resolves
+ * inside `base` after following symbolic links, so a linked `.claude` cannot
+ * redirect writes and deletions elsewhere.
+ */
+async function staysInside(base: string, path: string): Promise<boolean> {
+  const root = await realpath(base)
+  let current = path
+  for (;;) {
+    try {
+      const real = await realpath(current)
+      return real === root || real.startsWith(`${root}${sep}`)
+    } catch (error) {
+      if (!isMissing(error)) {
+        throw error
       }
+      const parent = dirname(current)
+      if (parent === current) {
+        return false
+      }
+      current = parent
     }
   }
-  return names.sort()
+}
+
+/**
+ * Returns `true` for a manifest entry that names a file inside its copy: a
+ * relative `/`-separated path without empty, `.`, or `..` segments.
+ */
+function isSafePath(file: string): boolean {
+  return (
+    file !== MANIFEST &&
+    !/[\\\0]/.test(file) &&
+    file
+      .split('/')
+      .every((part) => part !== '' && part !== '.' && part !== '..')
+  )
+}
+
+/** Lists the names of the directories in `source` that contain a `SKILL.md`. */
+async function bundleNames(source: string): Promise<string[]> {
+  const entries = await readdir(source, { withFileTypes: true })
+  const names = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(({ name }) =>
+        access(join(source, name, 'SKILL.md')).then(
+          () => name,
+          () => undefined
+        )
+      )
+  )
+  return names.filter((name) => name !== undefined).sort()
 }
 
 /** Reads every skill directory in `source` that contains a `SKILL.md`. */
 async function readBundles(source: string): Promise<Bundle[]> {
-  const bundles: Bundle[] = []
-  for (const name of await bundleNames(source)) {
-    const dir = join(source, name)
-    const paths = (await listFiles(dir)).filter((path) => path !== MANIFEST)
-    const files = new Map<string, Buffer>()
-    const hashes: Record<string, string> = {}
-    for (const path of paths) {
-      const content = await readFile(join(dir, path))
-      files.set(path, content)
-      hashes[path] = hash(content)
-    }
-    bundles.push({ name, files, hashes })
-  }
-  if (bundles.length === 0) {
+  const names = await bundleNames(source)
+  if (names.length === 0) {
     throw new Error(`No skills with a SKILL.md found in ${source}`)
   }
-  return bundles
+  return await Promise.all(
+    names.map(async (name) => {
+      const dir = join(source, name)
+      const paths = (await scan(dir)).files.filter((path) => path !== MANIFEST)
+      const files = await Promise.all(
+        paths.map(async (path): Promise<[string, BundleFile]> => {
+          const [content, info] = await Promise.all([
+            readFile(join(dir, path)),
+            stat(join(dir, path)),
+          ])
+          return [
+            path,
+            { content, mode: info.mode & 0o777, hash: hash(content) },
+          ]
+        })
+      )
+      return { name, files: new Map(files) }
+    })
+  )
 }
 
-/** Reads a copy's manifest; `undefined` when absent, invalid, or written by another CLI. */
+/**
+ * Reads a copy's manifest; `undefined` when absent, invalid, written by
+ * another CLI, or listing a path outside the copy.
+ */
 async function readManifest(
   path: string,
   cli: string
@@ -149,10 +254,15 @@ async function readManifest(
   }
   try {
     const manifest = JSON.parse(text) as Manifest
+    const files: unknown = manifest?.files
     return manifest.cli === cli &&
       typeof manifest.version === 'string' &&
-      typeof manifest.files === 'object' &&
-      manifest.files !== null
+      typeof files === 'object' &&
+      files !== null &&
+      !Array.isArray(files) &&
+      Object.entries(files).every(
+        ([file, digest]) => isSafePath(file) && typeof digest === 'string'
+      )
       ? manifest
       : undefined
   } catch {
@@ -168,35 +278,98 @@ async function inspect(
   name: string
 ): Promise<Copy> {
   const path = join(skillsRoot(scope, target), name)
-  const manifest = await readManifest(path, cli.name)
-  const edited: string[] = []
-  for (const [file, expected] of Object.entries(manifest?.files ?? {})) {
-    try {
-      if (hash(await readFile(join(path, file))) !== expected) {
-        edited.push(file)
-      }
-    } catch (error) {
-      if (!isMissing(error)) {
-        throw error
-      }
-      edited.push(file)
-    }
+  const found = await scan(path)
+  const links = found.links.map((link) => join(path, link))
+  if (!(await staysInside(scopeBase(scope), path))) {
+    links.unshift(path)
   }
-  const exists = manifest !== undefined || (await listFiles(path)).length > 0
-  return { name, target, path, exists, manifest, edited }
+  const manifest =
+    links.length > 0 ? undefined : await readManifest(path, cli.name)
+  const listed = Object.entries(manifest?.files ?? {})
+  const hashes = await Promise.all(
+    listed.map(([file]) => hashFile(join(path, file)))
+  )
+  const edited = listed
+    .filter(([, expected], index) => hashes[index] !== expected)
+    .map(([file]) => file)
+  return { name, target, path, files: found.files, links, manifest, edited }
 }
 
-/** `true` when a copy was installed by this CLI version from this bundle, unedited. */
-function isCurrent(cli: CliOptions, copy: Copy, bundle: Bundle): boolean {
-  const installed = copy.manifest?.files ?? {}
-  return (
-    copy.manifest?.version === cli.version &&
-    copy.edited.length === 0 &&
-    Object.keys(installed).length === bundle.files.size &&
-    Object.entries(bundle.hashes).every(
-      ([file, digest]) => installed[file] === digest
+/** Inspects every skill in each selected skills directory, in installation order. */
+function inspectAll<T extends { name: string }>(
+  cli: CliOptions,
+  scope: Scope,
+  targets: readonly Target[],
+  skills: readonly T[]
+): Promise<[T, Copy][]> {
+  return Promise.all(
+    TARGETS.filter((target) => targets.includes(target)).flatMap((target) =>
+      skills.map(
+        async (skill): Promise<[T, Copy]> => [
+          skill,
+          await inspect(cli, scope, target, skill.name),
+        ]
+      )
     )
   )
+}
+
+/** Classifies a copy against the bundle it would be installed from. */
+function stateOf(cli: CliOptions, copy: Copy, bundle: Bundle): State {
+  if (copy.links.length > 0) {
+    return 'symlink'
+  }
+  if (!copy.manifest) {
+    return copy.files.length > 0 ? 'unmanaged' : 'missing'
+  }
+  if (copy.edited.length > 0) {
+    return 'edited'
+  }
+  const installed = copy.manifest.files
+  const current =
+    copy.manifest.version === cli.version &&
+    Object.keys(installed).length === bundle.files.size &&
+    [...bundle.files].every(([file, { hash }]) => installed[file] === hash)
+  return current ? 'current' : 'stale'
+}
+
+/** Lists files the manifest does not list that the bundle would replace with different content. */
+async function overwrites(copy: Copy, bundle: Bundle): Promise<string[]> {
+  const listed = copy.manifest?.files ?? {}
+  const local = copy.files.filter(
+    (file) => !(file in listed) && bundle.files.has(file)
+  )
+  const hashes = await Promise.all(
+    local.map((file) => hashFile(join(copy.path, file)))
+  )
+  return local.filter(
+    (file, index) => hashes[index] !== bundle.files.get(file)?.hash
+  )
+}
+
+/**
+ * Returns why `install` must not write a copy: symbolic links always; without
+ * `--force`, a copy this CLI did not install, edited files, or local files
+ * the bundle would overwrite.
+ */
+async function conflictOf(
+  copy: Copy,
+  bundle: Bundle,
+  state: State,
+  force: boolean
+): Promise<Conflict | undefined> {
+  const base = { name: copy.name, target: copy.target, path: copy.path }
+  if (state === 'symlink') {
+    return { ...base, reason: 'symlink', files: copy.links }
+  }
+  if (force || state === 'missing') {
+    return undefined
+  }
+  if (state === 'unmanaged') {
+    return { ...base, reason: 'unmanaged' }
+  }
+  const files = [...copy.edited, ...(await overwrites(copy, bundle))].sort()
+  return files.length > 0 ? { ...base, reason: 'edited', files } : undefined
 }
 
 /** Removes a file, then any directories it leaves empty below `root`. */
@@ -213,23 +386,25 @@ async function removeFile(root: string, file: string): Promise<void> {
   }
 }
 
-/** Writes a bundle into a copy, removes files the previous version installed, and records the manifest. */
+/**
+ * Writes a bundle into a copy with its file modes, removes unedited files the
+ * previous version installed, and records the manifest.
+ */
 async function write(cli: CliOptions, copy: Copy, bundle: Bundle) {
-  for (const [file, content] of bundle.files) {
+  const files: Record<string, string> = {}
+  for (const [file, { content, mode, hash }] of bundle.files) {
     const path = join(copy.path, file)
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, content)
+    await chmod(path, mode)
+    files[file] = hash
   }
   for (const file of Object.keys(copy.manifest?.files ?? {})) {
-    if (!bundle.files.has(file)) {
+    if (!(bundle.files.has(file) || copy.edited.includes(file))) {
       await removeFile(copy.path, file)
     }
   }
-  const manifest: Manifest = {
-    cli: cli.name,
-    version: cli.version,
-    files: bundle.hashes,
-  }
+  const manifest: Manifest = { cli: cli.name, version: cli.version, files }
   await writeFile(
     join(copy.path, MANIFEST),
     `${JSON.stringify(manifest, null, 2)}\n`
@@ -237,7 +412,7 @@ async function write(cli: CliOptions, copy: Copy, bundle: Bundle) {
 }
 
 /** Returns the flags that repeat a scope and target selection on a command line. */
-function selection(scope: Scope, targets: Target[]): string {
+function selection(scope: Scope, targets: readonly Target[]): string {
   const flags = scope === 'global' ? ' --scope global' : ''
   return targets.length === TARGETS.length
     ? flags
@@ -257,50 +432,48 @@ export function install(
   return defineHandler(command, async (ctx) => {
     const { scope, target: targets, force } = ctx.input
     const bundles = await readBundles(sourcePath(source))
-    const pairs: { bundle: Bundle; copy: Copy }[] = []
-    for (const target of TARGETS.filter((name) => targets.includes(name))) {
-      for (const bundle of bundles) {
-        pairs.push({
-          bundle,
-          copy: await inspect(cli, scope, target, bundle.name),
+    const copies = (await inspectAll(cli, scope, targets, bundles)).map(
+      ([bundle, copy]) => ({ bundle, copy, state: stateOf(cli, copy, bundle) })
+    )
+    const conflicts = (
+      await Promise.all(
+        copies.map(({ bundle, copy, state }) =>
+          conflictOf(copy, bundle, state, force)
+        )
+      )
+    ).filter((conflict) => conflict !== undefined)
+    if (conflicts.length > 0) {
+      const next: Next[] = []
+      if (conflicts.some((conflict) => conflict.reason === 'symlink')) {
+        next.push({
+          by: 'user',
+          description:
+            'Remove the symbolic links from these skill directories; install never writes through them',
         })
       }
-    }
-    const conflicts = force
-      ? []
-      : pairs
-          .map(({ copy }) => copy)
-          .filter(
-            (copy) => copy.exists && (!copy.manifest || copy.edited.length > 0)
-          )
-    if (conflicts.length > 0) {
+      if (conflicts.some((conflict) => conflict.reason !== 'symlink')) {
+        next.push({
+          by: 'user',
+          command: `${cli.name} skills install${selection(scope, targets)} --force`,
+          description: 'Replace them, discarding local changes',
+        })
+      }
       throw new CliError({
         code: 'skill_conflict',
-        message: `Not replacing skill directories that were edited or not installed by ${cli.name}: ${conflicts.map((copy) => copy.path).join(', ')}.`,
+        message: `Not replacing skill directories with local changes, symbolic links, or files not installed by ${cli.name}: ${conflicts.map((conflict) => conflict.path).join(', ')}.`,
         retryable: false,
-        details: conflicts.map((copy) => ({
-          name: copy.name,
-          target: copy.target,
-          path: copy.path,
-          reason: copy.manifest ? 'edited' : 'unmanaged',
-          ...(copy.manifest ? { files: copy.edited } : {}),
-        })),
-        next: [
-          {
-            by: 'user',
-            command: `${cli.name} skills install${selection(scope, targets)} --force`,
-            description: 'Replace them, discarding local changes',
-          },
-        ],
+        details: conflicts,
+        next,
       })
     }
     const skills: InstalledCopy[] = []
-    for (const { bundle, copy } of pairs) {
-      const action = copy.exists
-        ? isCurrent(cli, copy, bundle)
-          ? 'unchanged'
-          : 'updated'
-        : 'installed'
+    for (const { bundle, copy, state } of copies) {
+      const action =
+        state === 'missing'
+          ? 'installed'
+          : state === 'current'
+            ? 'unchanged'
+            : 'updated'
       if (action !== 'unchanged' && !ctx.dryRun) {
         await write(cli, copy, bundle)
       }
@@ -326,39 +499,35 @@ export function uninstall(
 ): Handler {
   return defineHandler(command, async (ctx) => {
     const { scope, target: targets } = ctx.input
-    const names = await bundleNames(sourcePath(source))
+    const names = (await bundleNames(sourcePath(source))).map((name) => ({
+      name,
+    }))
     const skills: RemovedCopy[] = []
-    for (const target of TARGETS.filter((name) => targets.includes(name))) {
-      for (const name of names) {
-        const copy = await inspect(cli, scope, target, name)
-        const base = { name, target, path: copy.path }
-        if (!copy.exists) {
-          skills.push({ ...base, action: 'missing' })
-          continue
-        }
-        if (!copy.manifest) {
-          skills.push({ ...base, action: 'unmanaged' })
-          continue
-        }
-        const remove = Object.keys(copy.manifest.files).filter(
-          (file) => !copy.edited.includes(file)
-        )
-        const kept = (await listFiles(copy.path)).filter(
-          (file) => file !== MANIFEST && !remove.includes(file)
-        )
-        if (!ctx.dryRun) {
-          for (const file of remove) {
-            await removeFile(copy.path, file)
-          }
-          await rm(join(copy.path, MANIFEST), { force: true })
-          await rmdir(copy.path).catch(() => undefined)
-        }
-        skills.push({
-          ...base,
-          action: 'removed',
-          ...(kept.length > 0 ? { kept } : {}),
-        })
+    for (const [, copy] of await inspectAll(cli, scope, targets, names)) {
+      const base = { name: copy.name, target: copy.target, path: copy.path }
+      if (!copy.manifest) {
+        const missing = copy.files.length === 0 && copy.links.length === 0
+        skills.push({ ...base, action: missing ? 'missing' : 'unmanaged' })
+        continue
       }
+      const remove = Object.keys(copy.manifest.files).filter(
+        (file) => !copy.edited.includes(file)
+      )
+      const kept = copy.files.filter(
+        (file) => file !== MANIFEST && !remove.includes(file)
+      )
+      if (!ctx.dryRun) {
+        for (const file of remove) {
+          await removeFile(copy.path, file)
+        }
+        await rm(join(copy.path, MANIFEST), { force: true })
+        await rmdir(copy.path).catch(() => undefined)
+      }
+      skills.push({
+        ...base,
+        action: 'removed',
+        ...(kept.length > 0 ? { kept } : {}),
+      })
     }
     return ctx.ok({ scope, skills })
   })
@@ -380,26 +549,20 @@ export function status(
     const bundles = await readBundles(sourcePath(source))
     const skills: CopyStatus[] = []
     for (const scope of scopes) {
-      for (const target of TARGETS) {
-        for (const bundle of bundles) {
-          const copy = await inspect(cli, scope, target, bundle.name)
-          skills.push({
-            name: copy.name,
-            scope,
-            target,
-            path: copy.path,
-            status: copy.exists
-              ? copy.manifest
-                ? copy.edited.length > 0
-                  ? 'edited'
-                  : isCurrent(cli, copy, bundle)
-                    ? 'current'
-                    : 'stale'
-                : 'unmanaged'
-              : 'missing',
-            ...(copy.manifest ? { version: copy.manifest.version } : {}),
-          })
-        }
+      for (const [bundle, copy] of await inspectAll(
+        cli,
+        scope,
+        TARGETS,
+        bundles
+      )) {
+        skills.push({
+          name: copy.name,
+          scope,
+          target: copy.target,
+          path: copy.path,
+          status: stateOf(cli, copy, bundle),
+          ...(copy.manifest ? { version: copy.manifest.version } : {}),
+        })
       }
     }
     const next: Next[] = []
@@ -409,7 +572,7 @@ export function status(
       ) {
         next.push({
           by: 'agent',
-          command: `${cli.name} skills install${selection(scope, [...TARGETS])}`,
+          command: `${cli.name} skills install${selection(scope, TARGETS)}`,
           description: `Update the ${scope} skills to this version`,
         })
       }
@@ -434,16 +597,22 @@ export async function staleNotice(
   cli: CliOptions,
   source: URL | string
 ): Promise<string | undefined> {
+  const names = await bundleNames(sourcePath(source))
+  const found = await Promise.all(
+    names.flatMap((name) =>
+      TARGETS.map(async (target) => ({
+        name,
+        manifest: await readManifest(
+          join(skillsRoot('project', target), name),
+          cli.name
+        ),
+      }))
+    )
+  )
   const stale = new Map<string, string>()
-  for (const name of await bundleNames(sourcePath(source))) {
-    for (const target of TARGETS) {
-      const manifest = await readManifest(
-        join(skillsRoot('project', target), name),
-        cli.name
-      )
-      if (manifest && manifest.version !== cli.version) {
-        stale.set(name, manifest.version)
-      }
+  for (const { name, manifest } of found) {
+    if (manifest && manifest.version !== cli.version) {
+      stale.set(name, manifest.version)
     }
   }
   if (stale.size === 0) {

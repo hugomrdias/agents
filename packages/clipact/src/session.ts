@@ -146,6 +146,11 @@ export class Session {
     await this.#flushStderr()
   }
 
+  /** Waits until queued stderr lines are written, such as lines logged after the result. */
+  async flush(): Promise<void> {
+    await this.#flushStderr()
+  }
+
   /** Formats next steps for humans. */
   #formatNext(next: Next[]): string {
     const style = this.#style
