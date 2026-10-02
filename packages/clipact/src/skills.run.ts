@@ -51,21 +51,22 @@ interface Bundle {
   files: Map<string, BundleFile>
 }
 
-/** An installed copy of a skill, as found on disk. */
-interface Copy {
-  name: string
-  target: Target
-  path: string
+/** What is on disk at a copy's path, without reading its contents. */
+interface Location {
   /** Regular files on disk, as `/`-separated relative paths. */
   files: string[]
-  /**
-   * Symbolic links inside the copy, or the copy's path when it resolves
-   * outside its scope's base directory. The CLI never writes through them.
-   */
+  /** Symbolic links inside the copy. The CLI never writes through them. */
   links: string[]
   /** Where the copy's path resolves when that is outside its scope's base directory. */
   resolvesTo: string | undefined
-  /** Present only when this CLI installed the copy and it has no links. */
+}
+
+/** An installed copy of a skill, as found on disk. */
+interface Copy extends Location {
+  name: string
+  target: Target
+  path: string
+  /** Present only when this CLI installed the copy and it is not {@link isLinked}. */
   manifest: Manifest | undefined
   /** Installed files that were changed or deleted since. */
   edited: string[]
@@ -271,10 +272,28 @@ async function readManifest(
 }
 
 /**
- * Inspects the copy of a skill in one skills directory. `base` is the scope's
- * resolved directory: a copy that resolves outside it, such as through a
- * linked `.claude`, counts as a link, so writes and deletions never follow it.
+ * Lists a copy's files and links, and where it resolves when that is outside
+ * `base`, the scope's resolved directory, such as through a linked `.claude`.
  */
+async function locate(base: string, path: string): Promise<Location> {
+  const [found, real] = await Promise.all([scan(path), resolveExisting(path)])
+  return {
+    files: found.files,
+    links: found.links.map((link) => join(path, link)),
+    resolvesTo: isInside(base, real) ? undefined : real,
+  }
+}
+
+/**
+ * Returns `true` when writing a copy would follow a symbolic link: one inside
+ * it, or a linked directory that resolves outside its scope. `install` never
+ * writes such a copy, even with `--force`.
+ */
+function isLinked(location: Location): boolean {
+  return location.links.length > 0 || location.resolvesTo !== undefined
+}
+
+/** Inspects the copy of a skill in one skills directory; `base` is the scope's resolved directory. */
 async function inspect(
   cli: CliOptions,
   scope: Scope,
@@ -283,14 +302,10 @@ async function inspect(
   name: string
 ): Promise<Copy> {
   const path = join(skillsRoot(scope, target), name)
-  const [found, real] = await Promise.all([scan(path), resolveExisting(path)])
-  const links = found.links.map((link) => join(path, link))
-  const resolvesTo = isInside(base, real) ? undefined : real
-  if (resolvesTo) {
-    links.unshift(path)
-  }
-  const manifest =
-    links.length > 0 ? undefined : await readManifest(path, cli.name)
+  const location = await locate(base, path)
+  const manifest = isLinked(location)
+    ? undefined
+    : await readManifest(path, cli.name)
   const listed = Object.entries(manifest?.files ?? {})
   const hashes = await Promise.all(
     listed.map(([file]) => hashFile(join(path, file)))
@@ -298,16 +313,7 @@ async function inspect(
   const edited = listed
     .filter(([, expected], index) => hashes[index] !== expected)
     .map(([file]) => file)
-  return {
-    name,
-    target,
-    path,
-    files: found.files,
-    links,
-    resolvesTo,
-    manifest,
-    edited,
-  }
+  return { name, target, path, ...location, manifest, edited }
 }
 
 /** Inspects each named skill in each selected skills directory, in installation order. */
@@ -342,7 +348,7 @@ async function inspectBundles(
 
 /** Classifies a copy against the bundle it would be installed from. */
 function stateOf(cli: CliOptions, copy: Copy, bundle: Bundle): State {
-  if (copy.links.length > 0) {
+  if (isLinked(copy)) {
     return 'symlink'
   }
   if (!copy.manifest) {
@@ -389,8 +395,9 @@ async function conflictOf(
     return {
       ...base,
       reason: 'symlink',
-      files: copy.links,
-      ...(copy.resolvesTo ? { resolvesTo: copy.resolvesTo } : {}),
+      ...(copy.resolvesTo
+        ? { files: [copy.path, ...copy.links], resolvesTo: copy.resolvesTo }
+        : { files: copy.links }),
     }
   }
   if (force || state === 'missing') {
@@ -453,12 +460,19 @@ async function write(cli: CliOptions, copy: Copy, bundle: Bundle) {
   )
 }
 
-/** Returns the flags that repeat a scope and target selection on a command line. */
-function selection(scope: Scope, targets: readonly Target[]): string {
-  const flags = scope === 'global' ? ' --scope global' : ''
-  return targets.length === TARGETS.length
-    ? flags
-    : `${flags}${targets.map((target) => ` --target ${target}`).join('')}`
+/** Returns the `skills install` command line for a scope and target selection. */
+function installCommand(
+  cli: CliOptions,
+  scope: Scope,
+  targets: readonly Target[]
+): string {
+  const flags = [
+    ...(scope === 'global' ? ['--scope global'] : []),
+    ...(targets.length === TARGETS.length
+      ? []
+      : targets.map((target) => `--target ${target}`)),
+  ]
+  return [cli.name, 'skills', 'install', ...flags].join(' ')
 }
 
 /**
@@ -491,13 +505,8 @@ export function install(
     if (conflicts.length > 0) {
       const next: Next[] = []
       const outside = conflicts.filter((conflict) => conflict.resolvesTo)
-      if (
-        conflicts.some(
-          (conflict) =>
-            conflict.reason === 'symlink' &&
-            conflict.files?.some((file) => file !== conflict.path)
-        )
-      ) {
+      const base = scopeBaseName(scope)
+      if (copies.some(({ copy }) => copy.links.length > 0)) {
         next.push({
           by: 'user',
           description:
@@ -509,11 +518,11 @@ export function install(
         next.push(
           {
             by: 'user',
-            description: `Copy the skills by hand from ${source}, or replace the linked directory with a real one; install never writes outside the ${scopeBaseName(scope)}`,
+            description: `Copy the skills by hand from ${source}, or replace the linked directory with a real one; install never writes outside the ${base}`,
           },
           {
             by: 'user',
-            command: `${cli.name} skills install${selection(other, targets)}`,
+            command: installCommand(cli, other, targets),
             description: `Install into the ${other} scope instead`,
           }
         )
@@ -521,13 +530,20 @@ export function install(
       if (conflicts.some((conflict) => conflict.reason !== 'symlink')) {
         next.push({
           by: 'user',
-          command: `${cli.name} skills install${selection(scope, targets)} --force`,
+          command: `${installCommand(cli, scope, targets)} --force`,
           description: 'Replace them, discarding local changes',
         })
       }
+      const paths = conflicts.map((conflict) => conflict.path).join(', ')
+      const resolved = outside
+        .map(
+          (conflict) =>
+            ` ${conflict.path} resolves to ${conflict.resolvesTo}, outside the ${base}.`
+        )
+        .join('')
       throw new CliError({
         code: 'skill_conflict',
-        message: `Not replacing skill directories with local changes, symbolic links, or files not installed by ${cli.name}: ${conflicts.map((conflict) => conflict.path).join(', ')}.${outside.map((conflict) => ` ${conflict.path} resolves to ${conflict.resolvesTo}, outside the ${scopeBaseName(scope)}.`).join('')}`,
+        message: `Not replacing skill directories with local changes, symbolic links, or files not installed by ${cli.name}: ${paths}.${resolved}`,
         retryable: false,
         details: conflicts,
         next,
@@ -566,15 +582,12 @@ export function uninstall(
     for (const copy of await inspectAll(cli, scope, targets, names)) {
       const base = where(copy)
       if (!copy.manifest) {
-        // A copy outside the scope lists only its own path as a link.
-        const missing =
-          copy.files.length === 0 &&
-          copy.links.every((link) => link === copy.path)
-        const action = missing
-          ? 'missing'
-          : copy.links.length > 0
-            ? 'symlink'
-            : 'unmanaged'
+        let action: RemovedCopy['action'] = 'unmanaged'
+        if (copy.files.length === 0 && copy.links.length === 0) {
+          action = 'missing'
+        } else if (isLinked(copy)) {
+          action = 'symlink'
+        }
         skills.push({ ...base, action })
         continue
       }
@@ -635,7 +648,7 @@ export function status(
       ) {
         next.push({
           by: 'agent',
-          command: `${cli.name} skills install${selection(scope, TARGETS)}`,
+          command: installCommand(cli, scope, TARGETS),
           description: `Update the ${scope} skills to this version`,
         })
       }
@@ -644,7 +657,7 @@ export function status(
       const scope = ctx.input.scope ?? 'project'
       next.push({
         by: 'agent',
-        command: `${cli.name} skills install${selection(scope, TARGETS)}`,
+        command: installCommand(cli, scope, TARGETS),
         description:
           scope === 'global'
             ? 'Install the skills for every project'
@@ -659,7 +672,7 @@ export function status(
  * Returns a notice for project skills installed by another CLI version, or
  * `undefined`. Reads only the manifests of installed directories named like
  * a bundled skill, so it stays cheap enough to run after every human-mode
- * command, and skips copies that `install` would refuse to write.
+ * command, and skips {@link isLinked} copies, which `install` never writes.
  */
 export async function staleNotice(
   cli: CliOptions,
@@ -674,40 +687,29 @@ export async function staleNotice(
   if (installed.every((entries) => entries.length === 0)) {
     return undefined
   }
-  const shipped = new Set(await readdir(source))
+  const [shipped, base] = await Promise.all([
+    bundleNames(source).then((names) => new Set(names)),
+    realpath(scopeBase('project')),
+  ])
   const found = await Promise.all(
     TARGETS.flatMap((target, index) =>
       (installed[index] ?? [])
         .filter((name) => shipped.has(name))
-        .map(async (name) => ({
-          target,
-          name,
-          manifest: await readManifest(
-            join(skillsRoot('project', target), name),
-            cli.name
-          ),
-        }))
+        .map(async (name): Promise<[string, string] | undefined> => {
+          const path = join(skillsRoot('project', target), name)
+          const manifest = await readManifest(path, cli.name)
+          if (
+            !manifest ||
+            manifest.version === cli.version ||
+            isLinked(await locate(base, path))
+          ) {
+            return undefined
+          }
+          return [name, manifest.version]
+        })
     )
   )
-  const outdated = found.filter(
-    ({ manifest }) => manifest && manifest.version !== cli.version
-  )
-  if (outdated.length === 0) {
-    return undefined
-  }
-  const base = await realpath(scopeBase('project'))
-  const copies = await Promise.all(
-    outdated.map(({ target, name }) =>
-      inspect(cli, 'project', base, target, name)
-    )
-  )
-  const stale = new Map<string, string>()
-  for (const { name, manifest } of copies) {
-    // `inspect` drops the manifest of a copy with symbolic links.
-    if (manifest && manifest.version !== cli.version) {
-      stale.set(name, manifest.version)
-    }
-  }
+  const stale = new Map(found.filter((entry) => entry !== undefined))
   if (stale.size === 0) {
     return undefined
   }

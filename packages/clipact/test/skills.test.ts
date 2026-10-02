@@ -51,6 +51,10 @@ async function skills(...args: string[]) {
   return assertContract(await invoke(cli, ['skills', ...args]))
 }
 
+/** Runs a command in human mode, after which the stale skill notice may print. */
+const humanRun = () =>
+  invoke(cli, ['artifacts', 'label', 'id1', 'a', '--format', 'human'])
+
 /** Lists files below a directory, or `[]` when it does not exist. */
 async function files(dir: string): Promise<string[]> {
   try {
@@ -371,14 +375,7 @@ describe('stale skill notice', () => {
       JSON.stringify({ ...manifest, version: '1.0.0' })
     )
 
-    const human = await invoke(cli, [
-      'artifacts',
-      'label',
-      'id1',
-      'a',
-      '--format',
-      'human',
-    ])
+    const human = await humanRun()
     assert.equal(human.exitCode, 0)
     assert.doesNotMatch(human.stdout, /skill/)
     assert.match(
@@ -399,14 +396,7 @@ describe('stale skill notice', () => {
     )
     await symlink(outside, join(project, '.claude'))
 
-    const human = await invoke(cli, [
-      'artifacts',
-      'label',
-      'id1',
-      'a',
-      '--format',
-      'human',
-    ])
+    const human = await humanRun()
     assert.doesNotMatch(human.stderr, /skill/)
   })
 })
