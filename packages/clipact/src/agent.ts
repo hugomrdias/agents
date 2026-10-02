@@ -17,7 +17,7 @@ const VENDOR_VARIABLES: [variable: string, agent: string][] = [
 ]
 
 /** Returns `true` for a set variable that is not an explicit off value. */
-function isSet(value: string | undefined): value is string {
+export function isSet(value: string | undefined): value is string {
   return (
     value !== undefined && value !== '' && value !== '0' && value !== 'false'
   )
@@ -43,4 +43,15 @@ export function detectAgent(env: Env): string | false {
     }
   }
   return false
+}
+
+/** Parses common boolean spellings: `true`, `false`, `1`, and `0`. */
+export function parseBoolean(raw: string): boolean | undefined {
+  if (raw === 'true' || raw === '1') {
+    return true
+  }
+  if (raw === 'false' || raw === '0') {
+    return false
+  }
+  return undefined
 }

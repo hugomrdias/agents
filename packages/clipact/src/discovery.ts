@@ -1,5 +1,4 @@
-import type { AnyCommand, CliOptions } from './define.ts'
-import { BUILTIN_ERROR_CODES } from './errors.ts'
+import type { AnyCommand, CliOptions, CommandNode } from './define.ts'
 import { leaves } from './help.ts'
 import type { CommandSpec, JsonSchema } from './spec.ts'
 
@@ -9,7 +8,7 @@ function summary(path: string, command: AnyCommand): Record<string, unknown> {
     command: path,
     description: command.description,
     readOnly: command.readOnly === true,
-    idempotent: command.readOnly === true || command.idempotent === true,
+    idempotent: command.idempotent === true,
     confirm: command.confirm !== undefined,
     dryRun: command.dryRun === true,
   }
@@ -23,20 +22,14 @@ function summary(path: string, command: AnyCommand): Record<string, unknown> {
  */
 export function listSchema(
   cli: CliOptions,
-  node: CliOptions['commands'][number] | undefined,
+  node: CommandNode,
   path: string[]
 ): Record<string, unknown> {
-  const root = {
-    kind: 'group' as const,
-    name: cli.name,
-    description: '',
-    commands: cli.commands,
-  }
   return {
     ok: true,
     name: cli.name,
     version: cli.version,
-    commands: leaves(node ?? root, path).map(({ path: leafPath, command }) =>
+    commands: leaves(node, path).map(({ path: leafPath, command }) =>
       summary(leafPath, command)
     ),
     ...(cli.aliases && path.length === 0 ? { aliases: cli.aliases } : {}),
@@ -70,12 +63,12 @@ export function commandSchema(
       .filter((field) => field.secret)
       .map((field) => field.name),
     readOnly: command.readOnly === true,
-    idempotent: command.readOnly === true || command.idempotent === true,
+    idempotent: command.idempotent === true,
     confirm,
     dryRun: command.dryRun === true,
     input: redactSecrets(spec),
     output: spec.outputJsonSchema ?? null,
-    errors: [...(command.errors ?? []), ...BUILTIN_ERROR_CODES],
+    errors: spec.errors,
     aliases: Object.entries(cli.aliases ?? {})
       .filter(([, target]) => target === spec.path)
       .map(([alias]) => alias),

@@ -1,6 +1,15 @@
 import type { AnyCommand, CliOptions, CommandNode, Group } from './define.ts'
-import { BUILTIN_ERROR_CODES } from './errors.ts'
+import {
+  BUILTINS,
+  FRAMEWORK_FLAGS,
+  type FrameworkFlag,
+  flagTokens,
+} from './route.ts'
 import type { CommandSpec, FieldSpec, JsonSchema } from './spec.ts'
+
+/** The output contract, repeated in agent help. */
+const CONTRACT =
+  'Output is one JSON object on stdout; exit code 0 when "ok" is true, else 1.'
 
 /** A leaf command with its full path. */
 export interface Leaf {
@@ -30,6 +39,15 @@ function columns(rows: [string, string][], indent = '  '): string {
         : `${indent}${left}`
     )
     .join('\n')
+}
+
+/** Formats a framework flag as a help row, such as `-h, --help`. */
+function flagRow(flag: FrameworkFlag): [string, string] {
+  const tokens = flagTokens(flag).join(', ')
+  return [
+    flag.value ? `${tokens} ${flag.value.label}` : tokens,
+    flag.description,
+  ]
 }
 
 /** Returns the value placeholder for a field, such as `<mainnet|calibration>`. */
@@ -143,13 +161,11 @@ export function commandHelp(
         : `--${field.flag} ${valueLabel(field)}`,
       fieldNotes(field),
     ])
-  if (command.confirm) {
-    flags.push(['--yes', 'Confirm without a prompt'])
+  for (const flag of FRAMEWORK_FLAGS) {
+    if (!flag.global && (flag.when?.(command) ?? true)) {
+      flags.push(flagRow(flag))
+    }
   }
-  if (command.dryRun) {
-    flags.push(['--dry-run', 'Report what would happen without side effects'])
-  }
-  flags.push(['--input <file|->', 'Read input fields from a JSON object'])
   const environment = spec.fields
     .filter((field) => field.secret)
     .map((field): [string, string] => [
@@ -174,13 +190,9 @@ export function commandHelp(
     if (output) {
       sections.push(`Output fields: ${output}`)
     }
-    sections.push(
-      `Error codes: ${[...(command.errors ?? []), ...BUILTIN_ERROR_CODES].join(', ')}`
-    )
+    sections.push(`Error codes: ${spec.errors.join(', ')}`)
     sections.push(sideEffects(command).join('\n'))
-    sections.push(
-      `Output is one JSON object on stdout; exit code 0 when "ok" is true, else 1.\nFull schema: ${cli.name} schema ${spec.path}`
-    )
+    sections.push(`${CONTRACT}\nFull schema: ${cli.name} schema ${spec.path}`)
   } else {
     if (examples) {
       sections.push(examples)
@@ -218,18 +230,17 @@ export function groupHelp(
   sections.push(`Commands:\n${columns(rows)}`)
   if (isRoot) {
     sections.push(
-      `Built-in:\n${columns([
-        [
-          'schema [command...]',
-          'JSON Schema for a command, or the command list',
-        ],
-        ['completion <shell>', 'Print a bash, zsh, or fish completion script'],
-      ])}`
+      `Built-in:\n${columns(
+        Object.values(BUILTINS).map(({ usage, description }) => [
+          usage,
+          description,
+        ])
+      )}`
     )
   }
   if (agent) {
     sections.push(
-      `Run "${cli.name} <command> --help" for examples and flags, or "${cli.name} schema <command>" for JSON Schemas.\nOutput is one JSON object on stdout; exit code 0 when "ok" is true, else 1.`
+      `Run "${cli.name} <command> --help" for examples and flags, or "${cli.name} schema <command>" for JSON Schemas.\n${CONTRACT}`
     )
   } else {
     sections.push(globalFlags())
@@ -240,12 +251,7 @@ export function groupHelp(
 
 /** Lists the framework flags. */
 function globalFlags(): string {
-  return `Global flags:\n${columns([
-    ['--json', 'Write one JSON result to stdout'],
-    ['--format <human|json>', 'Choose the output format'],
-    ['--agent, --no-agent', 'Override agent detection'],
-    ['--debug', 'Show input sources and stack traces on stderr'],
-    ['-h, --help', 'Show help'],
-    ['--version', 'Show the version'],
-  ])}`
+  return `Global flags:\n${columns(
+    FRAMEWORK_FLAGS.filter((flag) => flag.global).map(flagRow)
+  )}`
 }

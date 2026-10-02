@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   type CliOptions,
   type Command,
@@ -65,9 +66,9 @@ export interface CopyStatus {
 
 const SCOPES = ['project', 'global'] as const
 
+const scopeName: JsonSchemaNode = { type: 'string', enum: SCOPES }
 const scope: JsonSchemaNode = {
-  type: 'string',
-  enum: SCOPES,
+  ...scopeName,
   description:
     'project installs under the current directory; global under the home directory',
 }
@@ -81,7 +82,6 @@ const target: JsonSchemaNode = {
 }
 
 const string: JsonSchemaNode = { type: 'string' }
-const scopeName: JsonSchemaNode = { type: 'string', enum: SCOPES }
 const targetName: JsonSchemaNode = { type: 'string', enum: TARGETS }
 
 /** A closed object schema whose fields are required unless listed in `optional`. */
@@ -215,6 +215,13 @@ function display(path: string): string {
   return path.startsWith(`${home}${sep}`) ? `~${path.slice(home.length)}` : path
 }
 
+/** Converts the `skills` option, a path or `file:` URL, to a path. */
+export function skillsPath(source: URL | string): string {
+  return typeof source === 'string' && !source.startsWith('file:')
+    ? source
+    : fileURLToPath(source)
+}
+
 /** Loads a handler from `skills.run.ts` only when its command runs. */
 function lazy(create: (run: typeof import('./skills.run.ts')) => Handler) {
   return async () => ({ default: create(await import('./skills.run.ts')) })
@@ -226,7 +233,8 @@ function lazy(create: (run: typeof import('./skills.run.ts')) => Handler) {
  *
  * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#a-setup-command
  */
-export function skillsGroup(cli: CliOptions, source: URL | string): Group {
+export function skillsGroup(cli: CliOptions, skills: URL | string): Group {
+  const source = skillsPath(skills)
   const install: InstallCommand = defineCommand({
     name: 'install',
     description: 'Install the bundled agent skills',

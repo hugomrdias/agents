@@ -57,7 +57,7 @@ export interface CommandOptions<
   errors?: string[]
   /** The command changes no state. Implies `idempotent`. */
   readOnly?: boolean
-  /** Repeating the command with the same input has no additional effect. */
+  /** Repeating the command with the same input has no additional effect; set by `readOnly`. */
   idempotent?: boolean
   /** A reason to confirm, or a function of the input that returns one. */
   confirm?: string | ((input: ParsedOf<I>) => string | undefined)
@@ -223,7 +223,12 @@ export function defineCommand<
       )
     }
   }
-  return Object.freeze({ kind: 'command', ...options }) as Command<I, O>
+  return Object.freeze({
+    kind: 'command',
+    ...options,
+    // readOnly implies idempotent; consumers read only `idempotent`.
+    idempotent: options.readOnly === true || options.idempotent === true,
+  }) as Command<I, O>
 }
 
 /** Defines a group of commands, such as `artifacts` in `acme artifacts put`. */

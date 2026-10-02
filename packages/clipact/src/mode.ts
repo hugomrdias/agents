@@ -1,4 +1,4 @@
-import { detectAgent } from './agent.ts'
+import { detectAgent, isSet, parseBoolean } from './agent.ts'
 import type { Mode } from './define.ts'
 import type { InputIssue } from './errors.ts'
 import type { Io } from './io.ts'
@@ -29,11 +29,8 @@ export function resolveMode(
   let override = flags.agent
   const rawAgent = io.env[agentVariable]
   if (override === undefined && rawAgent) {
-    if (rawAgent === '1' || rawAgent === 'true') {
-      override = true
-    } else if (rawAgent === '0' || rawAgent === 'false') {
-      override = false
-    } else {
+    override = parseBoolean(rawAgent)
+    if (override === undefined) {
       issues.push({
         path: agentVariable,
         source: `env:${agentVariable}`,
@@ -42,12 +39,8 @@ export function resolveMode(
     }
   }
   const detected = detectAgent(io.env)
-  let agent: string | false = detected
-  if (override === false) {
-    agent = false
-  } else if (override === true) {
-    agent = detected || 'unknown'
-  }
+  const agent =
+    override === undefined ? detected : override && (detected || 'unknown')
 
   if (flags.format !== undefined && !isFormat(flags.format)) {
     issues.push({
@@ -85,10 +78,7 @@ export function resolveMode(
     format = 'human'
   }
 
-  const ci = io.env.CI
   const interactive =
-    Boolean(io.stdin.isTTY && io.stdout.isTTY) &&
-    !agent &&
-    !(ci && ci !== '0' && ci !== 'false')
+    Boolean(io.stdin.isTTY && io.stdout.isTTY) && !agent && !isSet(io.env.CI)
   return { mode: { format, agent, interactive }, issues }
 }

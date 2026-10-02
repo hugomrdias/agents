@@ -60,7 +60,7 @@ describe('__complete', () => {
       'broken\tReturn invalid output',
       'publish\tAlias for artifacts put',
       'schema\tJSON Schema for a command, or the command list',
-      'completion\tPrint a shell completion script',
+      'completion\tPrint a bash, zsh, or fish completion script',
     ])
     assert.deepEqual(await values('art'), ['artifacts'])
     assert.deepEqual(await values('artifacts', ''), ['put', 'get', 'label'])

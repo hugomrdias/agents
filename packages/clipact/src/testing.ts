@@ -133,9 +133,9 @@ export function exec(
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       stderr += chunk
       const when = options.kill?.when
-      if (options.kill && !killed && when && stderr.includes(when)) {
+      if (when && !killed && stderr.includes(when)) {
         killed = true
-        child.kill(options.kill.signal)
+        child.kill(options.kill?.signal)
       }
     })
     child.on('error', reject)
@@ -193,16 +193,11 @@ export function assertContract(result: RunResult): Record<string, unknown> {
 
 /** Resolves every command definition and throws one error listing all problems. */
 export function assertDefinitions(cli: Cli): void {
-  const root = {
-    kind: 'group' as const,
-    name: cli.options.name,
-    description: '',
-    commands: cli.options.commands,
-  }
   const problems: string[] = []
-  for (const { path, command } of leaves(root)) {
+  for (const { path, command } of leaves(cli.root)) {
     try {
-      resolveSpec(command, path)
+      // Output schemas convert lazily; convert them here to catch problems.
+      void resolveSpec(command, path).outputJsonSchema
     } catch (error) {
       problems.push((error as Error).message)
     }
@@ -212,14 +207,8 @@ export function assertDefinitions(cli: Cli): void {
 
 /** Returns every command's `schema` output keyed by path, for snapshot tests. */
 export function schemas(cli: Cli): Record<string, Record<string, unknown>> {
-  const root = {
-    kind: 'group' as const,
-    name: cli.options.name,
-    description: '',
-    commands: cli.options.commands,
-  }
   return Object.fromEntries(
-    leaves(root).map(({ path, command }) => [
+    leaves(cli.root).map(({ path, command }) => [
       path,
       commandSchema(cli.options, resolveSpec(command, path)),
     ])

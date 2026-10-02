@@ -12,7 +12,6 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { type CliOptions, defineHandler, type Handler } from './define.ts'
 import { CliError, type Next } from './errors.ts'
 import {
@@ -82,13 +81,6 @@ interface Conflict {
   files?: string[]
 }
 
-/** Converts the `skills` option to a path. */
-function sourcePath(source: URL | string): string {
-  return typeof source === 'string' && !source.startsWith('file:')
-    ? source
-    : fileURLToPath(source)
-}
-
 /** Returns the directory a scope installs under: the current or home directory. */
 function scopeBase(scope: Scope): string {
   return scope === 'global' ? homedir() : process.cwd()
@@ -104,6 +96,21 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT'
 }
 
+/** Creates a rejection handler that returns `fallback` for a missing file and rethrows anything else. */
+function unlessMissing<T>(fallback: T): (error: unknown) => T {
+  return (error) => {
+    if (isMissing(error)) {
+      return fallback
+    }
+    throw error
+  }
+}
+
+/** Returns the identity of a copy as reported by every command. */
+function where(copy: Copy): Pick<Copy, 'name' | 'target' | 'path'> {
+  return { name: copy.name, target: copy.target, path: copy.path }
+}
+
 /**
  * Returns the SHA-256 of a file's content. Loads `node:crypto` on first use,
  * so the stale-skill notice never pays for it.
@@ -114,15 +121,8 @@ function hash(content: Buffer): string {
 }
 
 /** Returns the SHA-256 of a file, or `undefined` when it does not exist. */
-async function hashFile(path: string): Promise<string | undefined> {
-  try {
-    return hash(await readFile(path))
-  } catch (error) {
-    if (isMissing(error)) {
-      return undefined
-    }
-    throw error
-  }
+function hashFile(path: string): Promise<string | undefined> {
+  return readFile(path).then(hash, unlessMissing(undefined))
 }
 
 /**
@@ -132,34 +132,29 @@ async function hashFile(path: string): Promise<string | undefined> {
 async function scan(
   dir: string
 ): Promise<{ files: string[]; links: string[] }> {
-  try {
-    const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-    const paths = (keep: (entry: (typeof entries)[number]) => boolean) =>
-      entries
-        .filter(keep)
-        .map((entry) =>
-          relative(dir, join(entry.parentPath, entry.name)).split(sep).join('/')
-        )
-        .sort()
-    return {
-      files: paths((entry) => entry.isFile()),
-      links: paths((entry) => entry.isSymbolicLink()),
-    }
-  } catch (error) {
-    if (isMissing(error)) {
-      return { files: [], links: [] }
-    }
-    throw error
+  const entries = await readdir(dir, {
+    recursive: true,
+    withFileTypes: true,
+  }).catch(unlessMissing([]))
+  const paths = (keep: (entry: (typeof entries)[number]) => boolean) =>
+    entries
+      .filter(keep)
+      .map((entry) =>
+        relative(dir, join(entry.parentPath, entry.name)).split(sep).join('/')
+      )
+      .sort()
+  return {
+    files: paths((entry) => entry.isFile()),
+    links: paths((entry) => entry.isSymbolicLink()),
   }
 }
 
 /**
  * Returns `true` when `path`, or its nearest existing ancestor, resolves
- * inside `base` after following symbolic links, so a linked `.claude` cannot
- * redirect writes and deletions elsewhere.
+ * inside `root`, an already resolved directory, after following symbolic
+ * links, so a linked `.claude` cannot redirect writes and deletions elsewhere.
  */
-async function staysInside(base: string, path: string): Promise<boolean> {
-  const root = await realpath(base)
+async function staysInside(root: string, path: string): Promise<boolean> {
   let current = path
   for (;;) {
     try {
@@ -243,14 +238,11 @@ async function readManifest(
   path: string,
   cli: string
 ): Promise<Manifest | undefined> {
-  let text: string
-  try {
-    text = await readFile(join(path, MANIFEST), 'utf8')
-  } catch (error) {
-    if (isMissing(error)) {
-      return undefined
-    }
-    throw error
+  const text = await readFile(join(path, MANIFEST), 'utf8').catch(
+    unlessMissing(undefined)
+  )
+  if (text === undefined) {
+    return undefined
   }
   try {
     const manifest = JSON.parse(text) as Manifest
@@ -270,17 +262,21 @@ async function readManifest(
   }
 }
 
-/** Inspects the copy of a skill in one skills directory. */
+/** Inspects the copy of a skill in one skills directory; `base` is the scope's resolved directory. */
 async function inspect(
   cli: CliOptions,
   scope: Scope,
+  base: string,
   target: Target,
   name: string
 ): Promise<Copy> {
   const path = join(skillsRoot(scope, target), name)
-  const found = await scan(path)
+  const [found, inside] = await Promise.all([
+    scan(path),
+    staysInside(base, path),
+  ])
   const links = found.links.map((link) => join(path, link))
-  if (!(await staysInside(scopeBase(scope), path))) {
+  if (!inside) {
     links.unshift(path)
   }
   const manifest =
@@ -295,23 +291,34 @@ async function inspect(
   return { name, target, path, files: found.files, links, manifest, edited }
 }
 
-/** Inspects every skill in each selected skills directory, in installation order. */
-function inspectAll<T extends { name: string }>(
+/** Inspects each named skill in each selected skills directory, in installation order. */
+async function inspectAll(
   cli: CliOptions,
   scope: Scope,
   targets: readonly Target[],
-  skills: readonly T[]
-): Promise<[T, Copy][]> {
-  return Promise.all(
+  names: readonly string[]
+): Promise<Copy[]> {
+  const base = await realpath(scopeBase(scope))
+  return await Promise.all(
     TARGETS.filter((target) => targets.includes(target)).flatMap((target) =>
-      skills.map(
-        async (skill): Promise<[T, Copy]> => [
-          skill,
-          await inspect(cli, scope, target, skill.name),
-        ]
-      )
+      names.map((name) => inspect(cli, scope, base, target, name))
     )
   )
+}
+
+/** Inspects the copies of each bundle, paired with the bundle. */
+async function inspectBundles(
+  cli: CliOptions,
+  scope: Scope,
+  targets: readonly Target[],
+  bundles: readonly Bundle[]
+): Promise<{ bundle: Bundle; copy: Copy }[]> {
+  const byName = new Map(bundles.map((bundle) => [bundle.name, bundle]))
+  const copies = await inspectAll(cli, scope, targets, [...byName.keys()])
+  return copies.map((copy) => ({
+    bundle: byName.get(copy.name) as Bundle,
+    copy,
+  }))
 }
 
 /** Classifies a copy against the bundle it would be installed from. */
@@ -358,7 +365,7 @@ async function conflictOf(
   state: State,
   force: boolean
 ): Promise<Conflict | undefined> {
-  const base = { name: copy.name, target: copy.target, path: copy.path }
+  const base = where(copy)
   if (state === 'symlink') {
     return { ...base, reason: 'symlink', files: copy.links }
   }
@@ -391,14 +398,22 @@ async function removeFile(root: string, file: string): Promise<void> {
  * previous version installed, and records the manifest.
  */
 async function write(cli: CliOptions, copy: Copy, bundle: Bundle) {
-  const files: Record<string, string> = {}
-  for (const [file, { content, mode, hash }] of bundle.files) {
-    const path = join(copy.path, file)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, content)
-    await chmod(path, mode)
-    files[file] = hash
-  }
+  const paths = [...bundle.files.keys()].map((file) => join(copy.path, file))
+  await Promise.all(
+    [...new Set(paths.map((path) => dirname(path)))].map((dir) =>
+      mkdir(dir, { recursive: true })
+    )
+  )
+  await Promise.all(
+    [...bundle.files.values()].map(async ({ content, mode }, index) => {
+      const path = paths[index] as string
+      await writeFile(path, content)
+      await chmod(path, mode)
+    })
+  )
+  const files = Object.fromEntries(
+    [...bundle.files].map(([file, { hash }]) => [file, hash])
+  )
   for (const file of Object.keys(copy.manifest?.files ?? {})) {
     if (!(bundle.files.has(file) || copy.edited.includes(file))) {
       await removeFile(copy.path, file)
@@ -426,14 +441,18 @@ function selection(scope: Scope, targets: readonly Target[]): string {
  */
 export function install(
   cli: CliOptions,
-  source: URL | string,
+  source: string,
   command: InstallCommand
 ): Handler {
   return defineHandler(command, async (ctx) => {
     const { scope, target: targets, force } = ctx.input
-    const bundles = await readBundles(sourcePath(source))
-    const copies = (await inspectAll(cli, scope, targets, bundles)).map(
-      ([bundle, copy]) => ({ bundle, copy, state: stateOf(cli, copy, bundle) })
+    const bundles = await readBundles(source)
+    const copies = (await inspectBundles(cli, scope, targets, bundles)).map(
+      ({ bundle, copy }) => ({
+        bundle,
+        copy,
+        state: stateOf(cli, copy, bundle),
+      })
     )
     const conflicts = (
       await Promise.all(
@@ -477,12 +496,7 @@ export function install(
       if (action !== 'unchanged' && !ctx.dryRun) {
         await write(cli, copy, bundle)
       }
-      skills.push({
-        name: copy.name,
-        target: copy.target,
-        path: copy.path,
-        action,
-      })
+      skills.push({ ...where(copy), action })
     }
     return ctx.ok({ scope, skills })
   })
@@ -494,17 +508,15 @@ export function install(
  */
 export function uninstall(
   cli: CliOptions,
-  source: URL | string,
+  source: string,
   command: UninstallCommand
 ): Handler {
   return defineHandler(command, async (ctx) => {
     const { scope, target: targets } = ctx.input
-    const names = (await bundleNames(sourcePath(source))).map((name) => ({
-      name,
-    }))
+    const names = await bundleNames(source)
     const skills: RemovedCopy[] = []
-    for (const [, copy] of await inspectAll(cli, scope, targets, names)) {
-      const base = { name: copy.name, target: copy.target, path: copy.path }
+    for (const copy of await inspectAll(cli, scope, targets, names)) {
+      const base = where(copy)
       if (!copy.manifest) {
         const missing = copy.files.length === 0 && copy.links.length === 0
         skills.push({ ...base, action: missing ? 'missing' : 'unmanaged' })
@@ -539,32 +551,27 @@ export function uninstall(
  */
 export function status(
   cli: CliOptions,
-  source: URL | string,
+  source: string,
   command: StatusCommand
 ): Handler {
   return defineHandler(command, async (ctx) => {
     const scopes: Scope[] = ctx.input.scope
       ? [ctx.input.scope]
       : ['project', 'global']
-    const bundles = await readBundles(sourcePath(source))
-    const skills: CopyStatus[] = []
-    for (const scope of scopes) {
-      for (const [bundle, copy] of await inspectAll(
-        cli,
+    const bundles = await readBundles(source)
+    const inspected = await Promise.all(
+      scopes.map((scope) => inspectBundles(cli, scope, TARGETS, bundles))
+    )
+    const skills: CopyStatus[] = scopes.flatMap((scope, index) =>
+      (inspected[index] ?? []).map(({ bundle, copy }) => ({
+        name: copy.name,
         scope,
-        TARGETS,
-        bundles
-      )) {
-        skills.push({
-          name: copy.name,
-          scope,
-          target: copy.target,
-          path: copy.path,
-          status: stateOf(cli, copy, bundle),
-          ...(copy.manifest ? { version: copy.manifest.version } : {}),
-        })
-      }
-    }
+        target: copy.target,
+        path: copy.path,
+        status: stateOf(cli, copy, bundle),
+        ...(copy.manifest ? { version: copy.manifest.version } : {}),
+      }))
+    )
     const next: Next[] = []
     for (const scope of scopes) {
       if (
@@ -595,9 +602,18 @@ export function status(
  */
 export async function staleNotice(
   cli: CliOptions,
-  source: URL | string
+  source: string
 ): Promise<string | undefined> {
-  const names = await bundleNames(sourcePath(source))
+  // Most projects have no installed skills; skip reading the bundle then.
+  const installed = await Promise.all(
+    TARGETS.map((target) =>
+      readdir(skillsRoot('project', target)).catch(unlessMissing([]))
+    )
+  )
+  if (installed.every((entries) => entries.length === 0)) {
+    return undefined
+  }
+  const names = await bundleNames(source)
   const found = await Promise.all(
     names.flatMap((name) =>
       TARGETS.map(async (target) => ({

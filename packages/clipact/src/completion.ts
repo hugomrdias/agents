@@ -1,6 +1,14 @@
-import type { CliOptions, Group } from './define.ts'
+import type { AnyCommand, CliOptions, Group } from './define.ts'
 import { DefinitionError } from './errors.ts'
-import { findNode, route } from './route.ts'
+import {
+  BUILTINS,
+  builtins,
+  FRAMEWORK_FLAGS,
+  type FrameworkFlag,
+  findNode,
+  flagTokens,
+  route,
+} from './route.ts'
 import { type CommandSpec, type FieldSpec, resolveSpec } from './spec.ts'
 
 /** Shells with a completion script. */
@@ -37,33 +45,32 @@ interface Option {
   offered: boolean
 }
 
-/** Framework flags accepted anywhere before `--`. */
-const GLOBAL_OPTIONS: Option[] = [
-  frameworkOption('--json', 'Write one JSON result to stdout'),
-  frameworkOption('--format', 'Choose the output format', [
-    { value: 'human' },
-    { value: 'json' },
-  ]),
-  frameworkOption('--agent', 'Force agent mode'),
-  frameworkOption('--no-agent', 'Disable agent mode'),
-  frameworkOption('--debug', 'Show input sources and stack traces on stderr'),
-  frameworkOption('--help', 'Show help'),
-]
-
-/** Creates a framework flag, taking a value when `values` is given. */
-function frameworkOption(
-  flag: string,
-  description: string,
-  values?: Values
-): Option {
-  return {
-    flag,
-    description,
-    takesValue: values !== undefined,
-    values: values ?? [],
-    repeatable: false,
-    offered: true,
-  }
+/**
+ * Lists the framework flags a command accepts, or the global ones for a
+ * group. `--version` is offered only at the root, `-h` never.
+ */
+function frameworkOptions(
+  command: AnyCommand | undefined,
+  isRoot = false
+): Option[] {
+  const accepted = (flag: FrameworkFlag) =>
+    flag.global
+      ? flag.name !== 'version' || isRoot
+      : command !== undefined && (flag.when?.(command) ?? true)
+  return FRAMEWORK_FLAGS.filter(accepted).flatMap((flag) =>
+    flagTokens(flag)
+      .filter((token) => token.startsWith('--'))
+      .map((token) => ({
+        flag: token,
+        description: flag.description,
+        takesValue: flag.value !== undefined,
+        values: flag.value
+          ? (flag.value.choices?.map((value) => ({ value })) ?? FILES)
+          : [],
+        repeatable: false,
+        offered: true,
+      }))
+  )
 }
 
 /** Returns `true` for a supported shell name. */
@@ -113,9 +120,7 @@ function candidates(
     return []
   }
   if (routed.kind === 'builtin') {
-    const words = before.filter(
-      (arg, index) => !(routed.consumed.includes(index) || arg.startsWith('-'))
-    )
+    const words = routed.rest.filter((arg) => !arg.startsWith('-'))
     if (routed.name === 'completion') {
       return words.length === 0 ? SHELLS.map((value) => ({ value })) : []
     }
@@ -125,27 +130,14 @@ function candidates(
     const node = findNode(root, words)
     return node?.kind === 'group' ? children(cli, node, false) : []
   }
-  const { node, path, consumed } = routed
+  const { node, path, rest } = routed
   if (node.kind === 'group') {
     if (current.startsWith('-')) {
-      return flagCandidates(
-        path.length === 0
-          ? [
-              ...GLOBAL_OPTIONS,
-              frameworkOption('--version', 'Show the version'),
-            ]
-          : GLOBAL_OPTIONS,
-        []
-      )
+      return flagCandidates(frameworkOptions(undefined, path.length === 0), [])
     }
     return children(cli, node, path.length === 0)
   }
-  const spec = resolveSpec(node, path.join(' '))
-  return commandCandidates(
-    spec,
-    before.filter((_, index) => !consumed.includes(index)),
-    current
-  )
+  return commandCandidates(resolveSpec(node, path.join(' ')), rest, current)
 }
 
 /** Lists the commands of a group, with aliases and built-ins at the root. */
@@ -162,17 +154,8 @@ function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
       list.push({ value: alias, description: `Alias for ${target}` })
     }
   }
-  const builtins: Candidate[] = [
-    {
-      value: 'schema',
-      description: 'JSON Schema for a command, or the command list',
-    },
-    { value: 'completion', description: 'Print a shell completion script' },
-  ]
-  for (const builtin of builtins) {
-    if (!group.commands.some((child) => child.name === builtin.value)) {
-      list.push(builtin)
-    }
+  for (const name of builtins(group)) {
+    list.push({ value: name, description: BUILTINS[name].description })
   }
   return list
 }
@@ -241,7 +224,6 @@ function flagCandidates(options: Option[], used: string[]): Candidate[] {
 
 /** Lists every flag a command accepts, framework flags last. */
 function commandOptions(spec: CommandSpec): Option[] {
-  const { command } = spec
   const options: Option[] = spec.fields
     .filter((field) => !field.secret)
     .map((field) => ({
@@ -252,21 +234,7 @@ function commandOptions(spec: CommandSpec): Option[] {
       repeatable: field.kind === 'array',
       offered: !field.positional,
     }))
-  if (command.confirm) {
-    options.push(frameworkOption('--yes', 'Confirm without a prompt'))
-  }
-  if (command.dryRun) {
-    options.push(
-      frameworkOption(
-        '--dry-run',
-        'Report what would happen without side effects'
-      )
-    )
-  }
-  options.push(
-    frameworkOption('--input', 'Read input fields from a JSON object', FILES)
-  )
-  return [...options, ...GLOBAL_OPTIONS]
+  return [...options, ...frameworkOptions(spec.command)]
 }
 
 /** Lists the values of a field: its enum, file paths for strings, or nothing. */

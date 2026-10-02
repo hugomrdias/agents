@@ -1,27 +1,122 @@
-import type { CommandNode, Group } from './define.ts'
+import type { AnyCommand, CommandNode, Group } from './define.ts'
 import { DefinitionError } from './errors.ts'
 
-/** Framework flags that take a value, as raw tokens. */
-const VALUE_FLAGS = ['--format', '--input']
+/** A flag owned by the framework rather than a command's input. */
+export interface FrameworkFlag {
+  /** Name without dashes. */
+  name: string
+  description: string
+  /** Placeholder and choices when the flag takes a value. */
+  value?: { label: string; choices?: readonly string[] }
+  /** Single-letter alias, such as `h` for `-h`. */
+  short?: string
+  /** Also accepted as `--no-<name>`. */
+  negatable?: boolean
+  /** Accepted anywhere, including by built-in commands. */
+  global?: boolean
+  /** Accepted only by commands that support it. */
+  when?: (command: AnyCommand) => boolean
+}
 
-/** Framework flags without a value, as raw tokens. */
-const BOOLEAN_FLAGS = new Set([
-  '--json',
-  '--agent',
-  '--no-agent',
-  '--debug',
-  '--help',
-  '-h',
-  '--version',
-  '--yes',
-  '--dry-run',
-])
+/**
+ * Every framework flag, command flags first. Parsing, routing, help, and
+ * completion all derive from this list.
+ */
+export const FRAMEWORK_FLAGS: readonly FrameworkFlag[] = [
+  {
+    name: 'yes',
+    description: 'Confirm without a prompt',
+    when: (command) => Boolean(command.confirm),
+  },
+  {
+    name: 'dry-run',
+    description: 'Report what would happen without side effects',
+    when: (command) => command.dryRun === true,
+  },
+  {
+    name: 'input',
+    description: 'Read input fields from a JSON object',
+    value: { label: '<file|->' },
+  },
+  {
+    name: 'json',
+    description: 'Write one JSON result to stdout',
+    global: true,
+  },
+  {
+    name: 'format',
+    description: 'Choose the output format',
+    value: { label: '<human|json>', choices: ['human', 'json'] },
+    global: true,
+  },
+  {
+    name: 'agent',
+    description: 'Override agent detection',
+    negatable: true,
+    global: true,
+  },
+  {
+    name: 'debug',
+    description: 'Show input sources and stack traces on stderr',
+    global: true,
+  },
+  { name: 'help', description: 'Show help', short: 'h', global: true },
+  { name: 'version', description: 'Show the version', global: true },
+]
+
+/** Returns the raw tokens of a flag, such as `-h` and `--help`. */
+export function flagTokens(flag: FrameworkFlag): string[] {
+  return [
+    ...(flag.short ? [`-${flag.short}`] : []),
+    `--${flag.name}`,
+    ...(flag.negatable ? [`--no-${flag.name}`] : []),
+  ]
+}
+
+/**
+ * Classifies a raw argument as a framework flag that takes its value from
+ * the next argument (`value`), one complete in itself (`switch`), or neither.
+ */
+export function frameworkToken(
+  arg: string,
+  flags: readonly FrameworkFlag[] = FRAMEWORK_FLAGS
+): 'value' | 'switch' | undefined {
+  for (const flag of flags) {
+    if (flag.value) {
+      if (arg === `--${flag.name}`) {
+        return 'value'
+      }
+      if (arg.startsWith(`--${flag.name}=`)) {
+        return 'switch'
+      }
+    } else if (flagTokens(flag).includes(arg)) {
+      return 'switch'
+    }
+  }
+  return undefined
+}
 
 /** Built-in commands at the root, unless the root defines a command with the same name. */
-export const BUILTINS = ['schema', 'completion'] as const
+export const BUILTINS = {
+  schema: {
+    usage: 'schema [command...]',
+    description: 'JSON Schema for a command, or the command list',
+  },
+  completion: {
+    usage: 'completion <shell>',
+    description: 'Print a bash, zsh, or fish completion script',
+  },
+} as const
 
 /** The name of a built-in command. */
-export type Builtin = (typeof BUILTINS)[number]
+export type Builtin = keyof typeof BUILTINS
+
+/** Returns the built-in commands that the root does not shadow. */
+export function builtins(root: Group): Builtin[] {
+  return (Object.keys(BUILTINS) as Builtin[]).filter(
+    (name) => !root.commands.some((child) => child.name === name)
+  )
+}
 
 /** Framework flags that decide the mode and fast paths, scanned before parsing. */
 export interface GlobalFlags {
@@ -41,8 +136,8 @@ interface Word {
 
 /** The result of routing argv through the command tree. */
 export type Route =
-  | { kind: 'node'; node: CommandNode; path: string[]; consumed: number[] }
-  | { kind: 'builtin'; name: Builtin; consumed: number[] }
+  | { kind: 'node'; node: CommandNode; path: string[]; rest: string[] }
+  | { kind: 'builtin'; name: Builtin; rest: string[] }
   | {
       kind: 'unknown'
       group: Group
@@ -97,17 +192,14 @@ function leadingWords(args: string[]): Word[] {
       break
     }
     if (arg.startsWith('-') && arg !== '-') {
-      if (VALUE_FLAGS.includes(arg)) {
+      const token = frameworkToken(arg)
+      if (!token) {
+        break
+      }
+      if (token === 'value') {
         index++
-        continue
       }
-      if (
-        BOOLEAN_FLAGS.has(arg) ||
-        VALUE_FLAGS.some((flag) => arg.startsWith(`${flag}=`))
-      ) {
-        continue
-      }
-      break
+      continue
     }
     words.push({ index, value: arg })
   }
@@ -167,14 +259,13 @@ export function route(
   }
 
   const first = words[0]
-  const builtin = BUILTINS.find((name) => name === first?.value)
-  if (
-    position === 0 &&
-    first &&
-    builtin &&
-    !root.commands.some((child) => child.name === builtin)
-  ) {
-    return { kind: 'builtin', name: builtin, consumed: [first.index] }
+  const builtin = builtins(root).find((name) => name === first?.value)
+  if (position === 0 && first && builtin) {
+    return {
+      kind: 'builtin',
+      name: builtin,
+      rest: without(args, [first.index]),
+    }
   }
 
   while (node.kind === 'group' && position < words.length) {
@@ -200,7 +291,12 @@ export function route(
     consumed.push(word.index)
     position++
   }
-  return { kind: 'node', node, path, consumed }
+  return { kind: 'node', node, path, rest: without(args, consumed) }
+}
+
+/** Returns `args` without the given indexes. */
+function without(args: string[], indexes: number[]): string[] {
+  return args.filter((_, index) => !indexes.includes(index))
 }
 
 /** Returns the candidate within a small edit distance of `input`, if any. */

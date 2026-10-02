@@ -1,10 +1,9 @@
-import { readFile } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
 import { parseArgs } from 'node:util'
-import type { Env } from './agent.ts'
+import { type Env, parseBoolean } from './agent.ts'
 import { CliError, type InputIssue } from './errors.ts'
 import type { Io } from './io.ts'
-import { closest } from './route.ts'
+import { closest, FRAMEWORK_FLAGS } from './route.ts'
 import type { CommandSpec, FieldKind, FieldSpec } from './spec.ts'
 
 /** Framework values read while parsing a command's arguments. */
@@ -12,6 +11,13 @@ export interface FrameworkValues {
   input: string | undefined
   yes: boolean
   dryRun: boolean
+}
+
+/** Values collected from every source, where each came from, and the problems found. */
+interface Collected {
+  values: Record<string, unknown>
+  sources: Record<string, string>
+  issues: InputIssue[]
 }
 
 /** Validated input and where each value came from. */
@@ -34,10 +40,9 @@ export async function resolveInput(
   io: Io,
   signal: AbortSignal
 ): Promise<ResolvedInput> {
-  const issues: InputIssue[] = []
-  const values: Record<string, unknown> = {}
-  const sources: Record<string, string> = {}
-  const framework = parseCommandArgs(spec, args, values, sources, issues)
+  const collected: Collected = { values: {}, sources: {}, issues: [] }
+  const { values, sources, issues } = collected
+  const framework = parseCommandArgs(spec, args, collected)
 
   if (framework.input !== undefined) {
     const merged = await mergeInputJson(
@@ -45,17 +50,15 @@ export async function resolveInput(
       framework.input,
       io,
       signal,
-      values,
-      sources,
-      issues
+      collected
     )
     if (!merged) {
       // Every field would also be reported missing; report only the cause.
       throw invalidInput(issues)
     }
   }
-  applyEnv(spec, io.env, values, sources, issues)
-  rejectControlCharacters(values, sources, issues)
+  applyEnv(spec, io.env, collected)
+  rejectControlCharacters(collected)
 
   const flagged = new Set(issues.map((issue) => issue.path))
   const result = await spec.input['~standard'].validate(values)
@@ -70,14 +73,13 @@ export async function resolveInput(
       if (flagged.has(field)) {
         continue
       }
-      const fieldSpec = spec.fields.find(
-        (candidate) => candidate.name === field
-      )
+      const fieldSpec = spec.byName.get(field)
       const message =
         fieldSpec && values[field] === undefined && path === field
           ? missingMessage(fieldSpec)
           : issue.message
-      issues.push(withSource({ path, message }, sources[field]))
+      const source = sources[field]
+      issues.push(source ? { path, source, message } : { path, message })
     }
   }
   if (issues.length > 0 || !('value' in result)) {
@@ -94,7 +96,7 @@ export async function resolveInput(
 }
 
 /** Creates the `invalid_input` error from all input issues. */
-function invalidInput(issues: InputIssue[]): CliError {
+export function invalidInput(issues: InputIssue[]): CliError {
   const [first] = issues
   const summary = first
     ? `${first.path ? `${first.path}: ` : ''}${first.message}`
@@ -109,44 +111,27 @@ function invalidInput(issues: InputIssue[]): CliError {
   })
 }
 
-/** Adds `source` only when known, keeping the JSON compact. */
-function withSource(issue: InputIssue, source: string | undefined): InputIssue {
-  return source ? { path: issue.path, source, message: issue.message } : issue
-}
-
 /** Reads flags and positionals into `values`, reporting unknown or malformed ones. */
 function parseCommandArgs(
   spec: CommandSpec,
   args: string[],
-  values: Record<string, unknown>,
-  sources: Record<string, string>,
-  issues: InputIssue[]
+  collected: Collected
 ): FrameworkValues {
-  const { command } = spec
+  const { values, sources, issues } = collected
   const framework: FrameworkValues = {
     input: undefined,
     yes: false,
     dryRun: false,
   }
-  const frameworkOptions: Record<string, { type: 'string' | 'boolean' }> = {
-    json: { type: 'boolean' },
-    format: { type: 'string' },
-    agent: { type: 'boolean' },
-    debug: { type: 'boolean' },
-    help: { type: 'boolean' },
-    version: { type: 'boolean' },
-    input: { type: 'string' },
+  const frameworkFlags = new Map(
+    FRAMEWORK_FLAGS.filter((flag) => flag.when?.(spec.command) ?? true).map(
+      (flag) => [flag.name, flag]
+    )
+  )
+  const options: Record<string, { type: 'string' | 'boolean' }> = {}
+  for (const flag of frameworkFlags.values()) {
+    options[flag.name] = { type: flag.value ? 'string' : 'boolean' }
   }
-  if (command.confirm) {
-    frameworkOptions.yes = { type: 'boolean' }
-  }
-  if (command.dryRun) {
-    frameworkOptions['dry-run'] = { type: 'boolean' }
-  }
-  const options: Record<
-    string,
-    { type: 'string' | 'boolean'; multiple?: boolean }
-  > = { ...frameworkOptions }
   for (const field of spec.fields) {
     options[field.flag] = {
       type: field.kind === 'boolean' ? 'boolean' : 'string',
@@ -162,6 +147,8 @@ function parseCommandArgs(
     tokens: true,
   })
 
+  const flagIssue = (path: string, message: string) =>
+    issues.push({ path, source: 'flag', message })
   const positionals: string[] = []
   // An unknown flag probably takes a value; skip it instead of reporting it twice.
   let skipIndex = -1
@@ -176,30 +163,16 @@ function parseCommandArgs(
       continue
     }
     const negated = token.rawName.startsWith('--no-')
-    if (token.name in frameworkOptions) {
-      if (negated && token.name !== 'agent') {
-        issues.push({
-          path: token.rawName,
-          source: 'flag',
-          message: 'Unknown flag',
-        })
-      } else if (
-        frameworkOptions[token.name]?.type === 'boolean' &&
-        token.value !== undefined
-      ) {
+    const frameworkFlag = frameworkFlags.get(token.name)
+    if (frameworkFlag) {
+      if (negated && !frameworkFlag.negatable) {
+        flagIssue(token.rawName, 'Unknown flag')
+      } else if (!frameworkFlag.value && token.value !== undefined) {
         // `--yes=false` must not approve anything; switches take no value.
-        issues.push({
-          path: token.rawName,
-          source: 'flag',
-          message: `${token.rawName} does not take a value`,
-        })
-      } else if (frameworkOptions[token.name]?.type === 'string') {
+        flagIssue(token.rawName, `${token.rawName} does not take a value`)
+      } else if (frameworkFlag.value) {
         if (token.value === undefined) {
-          issues.push({
-            path: token.rawName,
-            source: 'flag',
-            message: 'Requires a value',
-          })
+          flagIssue(token.rawName, 'Requires a value')
         } else if (token.name === 'input') {
           framework.input = token.value
         }
@@ -220,56 +193,40 @@ function parseCommandArgs(
         token.name,
         Object.keys(options).filter((name) => !spec.byFlag.get(name)?.secret)
       )
-      issues.push({
-        path: token.rawName,
-        source: 'flag',
-        message: suggestion
+      flagIssue(
+        token.rawName,
+        suggestion
           ? `Unknown flag; did you mean --${suggestion}?`
-          : 'Unknown flag',
-      })
+          : 'Unknown flag'
+      )
       continue
     }
     if (field.secret) {
-      issues.push({
-        path: field.name,
-        source: 'flag',
-        message: `Secret values are read only from ${field.env}`,
-      })
+      flagIssue(field.name, `Secret values are read only from ${field.env}`)
       continue
     }
     let value: unknown
     if (field.kind === 'boolean') {
-      if (negated) {
-        value = false
-      } else if (token.value === undefined) {
-        value = true
-      } else {
-        value = parseBoolean(token.value) ?? token.value
-      }
+      value = negated
+        ? false
+        : token.value === undefined
+          ? true
+          : coerce('boolean', token.value)
     } else if (negated) {
-      issues.push({
-        path: field.name,
-        source: 'flag',
-        message: `--no-${field.flag} is only valid for boolean flags`,
-      })
+      flagIssue(
+        field.name,
+        `--no-${field.flag} is only valid for boolean flags`
+      )
       continue
     } else if (token.value === undefined) {
-      issues.push({
-        path: field.name,
-        source: 'flag',
-        message: `--${field.flag} requires a value`,
-      })
+      flagIssue(field.name, `--${field.flag} requires a value`)
       continue
     } else if (field.kind === 'array') {
       const list = (values[field.name] as unknown[] | undefined) ?? []
       list.push(coerce(field.itemKind, token.value))
       value = list
     } else if (field.name in values) {
-      issues.push({
-        path: field.name,
-        source: 'flag',
-        message: `--${field.flag} was given more than once`,
-      })
+      flagIssue(field.name, `--${field.flag} was given more than once`)
       continue
     } else {
       value = coerce(field.kind, token.value)
@@ -278,14 +235,12 @@ function parseCommandArgs(
     sources[field.name] = 'flag'
   }
 
-  assignPositionals(spec, positionals, values, sources, issues)
+  assignPositionals(spec, positionals, collected)
   if (framework.input === '-' && positionals.includes('-')) {
-    issues.push({
-      path: '--input',
-      source: 'flag',
-      message:
-        'Only one source can read stdin; "-" is also used as an argument',
-    })
+    flagIssue(
+      '--input',
+      'Only one source can read stdin; "-" is also used as an argument'
+    )
   }
   return framework
 }
@@ -294,9 +249,7 @@ function parseCommandArgs(
 function assignPositionals(
   spec: CommandSpec,
   positionals: string[],
-  values: Record<string, unknown>,
-  sources: Record<string, string>,
-  issues: InputIssue[]
+  { values, sources, issues }: Collected
 ): void {
   let index = 0
   for (const field of spec.positionals) {
@@ -335,12 +288,12 @@ async function mergeInputJson(
   location: string,
   io: Io,
   signal: AbortSignal,
-  values: Record<string, unknown>,
-  sources: Record<string, string>,
-  issues: InputIssue[]
+  { values, sources, issues }: Collected
 ): Promise<boolean> {
   let text: string
   try {
+    // Loaded on use, so commands without --input never pay for node:fs.
+    const { readFile } = process.getBuiltinModule('node:fs/promises')
     text =
       location === '-'
         ? await readStream(io.stdin, signal)
@@ -372,7 +325,7 @@ async function mergeInputJson(
     return false
   }
   for (const [key, value] of Object.entries(json)) {
-    const field = spec.fields.find((candidate) => candidate.name === key)
+    const field = spec.byName.get(key)
     if (field?.secret) {
       issues.push({
         path: key,
@@ -397,9 +350,7 @@ async function mergeInputJson(
 function applyEnv(
   spec: CommandSpec,
   env: Env,
-  values: Record<string, unknown>,
-  sources: Record<string, string>,
-  issues: InputIssue[]
+  { values, sources, issues }: Collected
 ): void {
   for (const field of spec.fields) {
     if (!field.env || field.name in values) {
@@ -449,18 +400,6 @@ function coerce(kind: FieldKind, raw: string): unknown {
   return raw
 }
 
-/** Parses common boolean spellings. */
-function parseBoolean(raw: string): boolean | undefined {
-  if (raw === 'true' || raw === '1') {
-    return true
-  }
-  if (raw === 'false' || raw === '0') {
-    return false
-  }
-  return undefined
-}
-
-/** Reads a stream to a string. */
 /** A decimal number such as `5`, `-1.5`, or `2e3`. */
 const DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 
@@ -473,11 +412,7 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
  * flags, positionals, and environment variables, a common sign of a
  * garbled command line. `--input` JSON is exempt; it can encode any text.
  */
-function rejectControlCharacters(
-  values: Record<string, unknown>,
-  sources: Record<string, string>,
-  issues: InputIssue[]
-): void {
+function rejectControlCharacters({ values, sources, issues }: Collected): void {
   for (const [name, source] of Object.entries(sources)) {
     if (source === 'input') {
       continue

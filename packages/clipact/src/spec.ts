@@ -1,6 +1,7 @@
 import type { AnyCommand, Schema } from './define.ts'
-import { DefinitionError } from './errors.ts'
+import { BUILTIN_ERROR_CODES, DefinitionError } from './errors.ts'
 import { fromJsonSchema } from './json-schema.ts'
+import { FRAMEWORK_FLAGS } from './route.ts'
 
 /** A JSON Schema object as produced by Standard JSON Schema converters. */
 export type JsonSchema = Record<string, unknown>
@@ -40,24 +41,15 @@ export interface CommandSpec {
   command: AnyCommand
   input: Schema
   inputJsonSchema: JsonSchema
-  outputJsonSchema: JsonSchema | undefined
+  /** Converted on first use; only `schema` and agent help read it. */
+  readonly outputJsonSchema: JsonSchema | undefined
   fields: FieldSpec[]
   positionals: FieldSpec[]
+  byName: Map<string, FieldSpec>
   byFlag: Map<string, FieldSpec>
+  /** Declared error codes followed by the built-in ones. */
+  errors: string[]
 }
-
-/** Flags owned by the framework; input fields may not use these names. */
-export const FRAMEWORK_FLAGS = new Set([
-  'json',
-  'format',
-  'agent',
-  'input',
-  'yes',
-  'dry-run',
-  'debug',
-  'help',
-  'version',
-])
 
 const JSON_SCHEMA_TARGET = { target: 'draft-2020-12' } as const
 
@@ -88,8 +80,6 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
   const input: Schema = command.input ?? EMPTY_INPUT
   const inputJsonSchema =
     input['~standard'].jsonSchema.input(JSON_SCHEMA_TARGET)
-  const outputJsonSchema =
-    command.output?.['~standard'].jsonSchema.output(JSON_SCHEMA_TARGET)
   if (inputJsonSchema.type !== 'object') {
     throw new DefinitionError(path, 'input must be an object schema')
   }
@@ -139,8 +129,9 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
     }
   )
 
+  const byName = new Map(fields.map((field) => [field.name, field]))
   const positionals = positionalNames.map(
-    (name) => fields.find((field) => field.name === name) as FieldSpec
+    (name) => byName.get(name) as FieldSpec
   )
   let seenOptional = false
   for (const [index, field] of positionals.entries()) {
@@ -173,7 +164,7 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
 
   const byFlag = new Map<string, FieldSpec>()
   for (const field of fields) {
-    if (FRAMEWORK_FLAGS.has(field.flag)) {
+    if (FRAMEWORK_FLAGS.some((flag) => flag.name === field.flag)) {
       throw new DefinitionError(
         path,
         `field "${field.name}" clashes with the framework flag --${field.flag}`
@@ -182,15 +173,22 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
     byFlag.set(field.flag, field)
   }
 
+  let outputJsonSchema: JsonSchema | undefined
   const spec: CommandSpec = {
     path,
     command,
     input,
     inputJsonSchema,
-    outputJsonSchema,
+    get outputJsonSchema() {
+      outputJsonSchema ??=
+        command.output?.['~standard'].jsonSchema.output(JSON_SCHEMA_TARGET)
+      return outputJsonSchema
+    },
     fields,
     positionals,
+    byName,
     byFlag,
+    errors: [...(command.errors ?? []), ...BUILTIN_ERROR_CODES],
   }
   cache.set(command, spec)
   return spec
@@ -223,13 +221,17 @@ function kindOf(schema: JsonSchema, root: JsonSchema): FieldKind {
       }
       return
     }
-    if ('const' in resolved) {
-      kinds.add(kindOfValue(resolved.const))
-      return
-    }
-    if (Array.isArray(resolved.enum)) {
-      for (const value of resolved.enum) {
-        kinds.add(kindOfValue(value))
+    const values =
+      'const' in resolved
+        ? [resolved.const]
+        : Array.isArray(resolved.enum)
+          ? resolved.enum
+          : undefined
+    if (values) {
+      for (const value of values) {
+        if (value !== null) {
+          kinds.add(kindOfValue(value))
+        }
       }
       return
     }
@@ -244,18 +246,14 @@ function kindOf(schema: JsonSchema, root: JsonSchema): FieldKind {
     }
   }
   visit(schema)
-  kinds.delete('null' as FieldKind)
   if (kinds.size === 2 && kinds.has('integer') && kinds.has('number')) {
     return 'number'
   }
   return kinds.size === 1 ? ([...kinds][0] as FieldKind) : 'unknown'
 }
 
-/** Maps a JavaScript value to its JSON type. */
+/** Maps a non-null JavaScript value to its JSON type. */
 function kindOfValue(value: unknown): FieldKind {
-  if (value === null) {
-    return 'null' as FieldKind
-  }
   if (Array.isArray(value)) {
     return 'array'
   }

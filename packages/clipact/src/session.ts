@@ -1,12 +1,19 @@
 import type { CliOptions, Mode, ProgressEvent } from './define.ts'
-import type { InputIssue, Next } from './errors.ts'
+import type { ErrorBody, InputIssue, Next } from './errors.ts'
 import { type Io, styler, writeAsync } from './io.ts'
 
 /** Minimum interval between progress lines when no human is watching. */
 export const PROGRESS_INTERVAL_MS = 15_000
 
+/** Returns the cursor to the line start and erases the line. */
+const CLEAR_LINE = '\r\x1b[2K'
+
 /** A result object as written to stdout in machine mode. */
-export type ResultObject = Record<string, unknown> & { ok: boolean }
+export type ResultObject = Record<string, unknown> & {
+  ok: boolean
+  error?: ErrorBody
+  next?: Next[]
+}
 
 /** What to print besides the result in human mode or on a usage error. */
 export interface RenderExtras {
@@ -30,7 +37,8 @@ export class Session {
   #rendered = false
   #statusLine = false
   #lastProgress = 0
-  #pending: Promise<void>[] = []
+  /** The latest stderr write; writes to one stream complete in order. */
+  #pending: Promise<void> = Promise.resolve()
   readonly #style: ReturnType<typeof styler>
 
   /** Creates a session for the resolved mode. */
@@ -42,15 +50,10 @@ export class Session {
     this.#style = styler(io.stderr, mode.format === 'human' && !mode.agent)
   }
 
-  /** `true` once the result has been written. */
-  get rendered(): boolean {
-    return this.#rendered
-  }
-
   /** Writes a line to stderr, clearing any status line first. */
   log(message: string): void {
     this.#clearStatus()
-    this.#pending.push(writeAsync(this.io.stderr, `${message}\n`))
+    this.#stderr(`${message}\n`)
   }
 
   /**
@@ -64,9 +67,7 @@ export class Session {
       !this.mode.agent &&
       this.io.stderr.isTTY
     ) {
-      this.#pending.push(
-        writeAsync(this.io.stderr, `\r\x1b[2K${this.#style('dim', text)}`)
-      )
+      this.#stderr(`${CLEAR_LINE}${this.#style('dim', text)}`)
       this.#statusLine = true
       return
     }
@@ -80,7 +81,7 @@ export class Session {
   /** Writes plain text to stdout, such as help or the version. */
   async text(text: string): Promise<void> {
     this.#rendered = true
-    await this.#flushStderr()
+    await this.flush()
     await writeAsync(this.io.stdout, text)
   }
 
@@ -96,10 +97,7 @@ export class Session {
     const json =
       this.mode.format === 'json' ? `${JSON.stringify(result)}\n` : undefined
     this.#rendered = true
-    const error = result.error as
-      | { code: string; message: string; details?: unknown }
-      | undefined
-    const next = result.next as Next[] | undefined
+    const { error, next } = result
 
     if (json !== undefined) {
       if (error) {
@@ -108,7 +106,7 @@ export class Session {
           this.log(extras.help)
         }
       }
-      await this.#flushStderr()
+      await this.flush()
       await writeAsync(this.io.stdout, json)
       return
     }
@@ -133,8 +131,7 @@ export class Session {
       }
       this.log(lines.join('\n'))
     } else if (extras.human) {
-      this.#clearStatus()
-      await this.#flushStderr()
+      await this.flush()
       await writeAsync(
         this.io.stdout,
         extras.human.endsWith('\n') ? extras.human : `${extras.human}\n`
@@ -143,12 +140,13 @@ export class Session {
     if (next?.length) {
       this.log(this.#formatNext(next))
     }
-    await this.#flushStderr()
+    await this.flush()
   }
 
-  /** Waits until queued stderr lines are written, such as lines logged after the result. */
+  /** Clears any status line and waits until earlier stderr writes are handed to the OS. */
   async flush(): Promise<void> {
-    await this.#flushStderr()
+    this.#clearStatus()
+    await this.#pending
   }
 
   /** Formats next steps for humans. */
@@ -166,16 +164,13 @@ export class Session {
   #clearStatus(): void {
     if (this.#statusLine) {
       this.#statusLine = false
-      this.#pending.push(writeAsync(this.io.stderr, '\r\x1b[2K'))
+      this.#stderr(CLEAR_LINE)
     }
   }
 
-  /** Waits until earlier stderr writes are handed to the OS. */
-  async #flushStderr(): Promise<void> {
-    this.#clearStatus()
-    const pending = this.#pending
-    this.#pending = []
-    await Promise.all(pending)
+  /** Queues a write to stderr. */
+  #stderr(chunk: string): void {
+    this.#pending = writeAsync(this.io.stderr, chunk)
   }
 }
 

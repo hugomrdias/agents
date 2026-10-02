@@ -1,4 +1,3 @@
-import { createInterface } from 'node:readline/promises'
 import {
   COMPLETE_COMMAND,
   complete,
@@ -21,7 +20,6 @@ import {
 } from './define.ts'
 import { commandSchema, listSchema } from './discovery.ts'
 import {
-  BUILTIN_ERROR_CODES,
   CliError,
   DefinitionError,
   type InputIssue,
@@ -30,12 +28,15 @@ import {
   TRANSIENT_ERROR_CODES,
 } from './errors.ts'
 import { commandHelp, groupHelp, leaves, usage } from './help.ts'
-import { type FrameworkValues, resolveInput } from './input.ts'
+import { type FrameworkValues, invalidInput, resolveInput } from './input.ts'
 import { type Io, processIo } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
   closest,
+  FRAMEWORK_FLAGS,
   findNode,
+  frameworkToken,
+  type GlobalFlags,
   type Route,
   route,
   scanGlobalFlags,
@@ -46,7 +47,7 @@ import {
   type ResultObject,
   Session,
 } from './session.ts'
-import { skillsGroup } from './skills.ts'
+import { skillsGroup, skillsPath } from './skills.ts'
 import { type CommandSpec, resolveSpec } from './spec.ts'
 
 /** Signals that cancel the running command. */
@@ -54,6 +55,18 @@ const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
 
 /** Keys of the result envelope that command data may not use. */
 const RESERVED_KEYS = ['ok', 'error', 'next']
+
+/** Global flags that built-in commands ignore; each built-in decides about `--help`. */
+const BUILTIN_IGNORED_FLAGS = FRAMEWORK_FLAGS.filter(
+  (flag) => flag.global && flag.name !== 'help'
+)
+
+/** The outcome of a command that printed text, such as help. */
+const TEXT_OUTCOME: Outcome = {
+  exitCode: 0,
+  result: undefined,
+  signal: undefined,
+}
 
 /** The outcome of one invocation. */
 export interface Outcome {
@@ -77,6 +90,8 @@ export interface ExecuteOptions {
 /** A CLI created by {@link defineCli}. */
 export interface Cli {
   readonly options: CliOptions
+  /** The root group of the command tree, including the `skills` group. */
+  readonly root: Group
   /** Framework variable prefix, such as `ACME`. */
   readonly envPrefix: string
   /** Runs with the real process: installs signal and crash handlers and sets the exit code. */
@@ -118,17 +133,9 @@ export function defineCli(definition: CliOptions): Cli {
     executeOptions: ExecuteOptions = {}
   ): Promise<Outcome> => {
     const controller = new AbortController()
-    const external = executeOptions.signal
-    if (external?.aborted) {
-      controller.abort(external.reason)
-    }
-    external?.addEventListener(
-      'abort',
-      () => controller.abort(external.reason),
-      {
-        once: true,
-      }
-    )
+    const signal = executeOptions.signal
+      ? AbortSignal.any([controller.signal, executeOptions.signal])
+      : controller.signal
     const flags = scanGlobalFlags(args)
     const { mode, issues: modeIssues } = resolveMode(flags, io, envPrefix)
     const session = new Session(options, io, mode, flags.debug)
@@ -142,7 +149,7 @@ export function defineCli(definition: CliOptions): Cli {
       flags,
       session,
       controller,
-      signal: controller.signal,
+      signal,
       strict: executeOptions.strict === true,
     })
     const work = invocation.run()
@@ -160,6 +167,7 @@ export function defineCli(definition: CliOptions): Cli {
 
   return {
     options,
+    root,
     envPrefix,
     execute,
     async run(argv = process.argv) {
@@ -175,10 +183,8 @@ export function defineCli(definition: CliOptions): Cli {
         throw error
       })
       let finished = false
-      let reportCrash: (error: unknown) => void = () => undefined
-      const crash = new Promise<never>((_resolve, reject) => {
-        reportCrash = reject
-      })
+      const { promise: crash, reject: reportCrash } =
+        Promise.withResolvers<never>()
       crash.catch(() => undefined)
       const onCrash = (error: unknown) => {
         if (finished) {
@@ -217,10 +223,11 @@ interface InvocationState {
   io: Io
   mode: Mode
   modeIssues: InputIssue[]
-  flags: ReturnType<typeof scanGlobalFlags>
+  flags: GlobalFlags
   session: Session
-  /** Aborted with a signal name; linked to the caller's signal. */
+  /** Aborted with a signal name. */
   controller: AbortController
+  /** Aborted by `controller` or the caller's signal. */
   signal: AbortSignal
   strict: boolean
 }
@@ -240,16 +247,14 @@ class Invocation {
 
   /** Routes, parses, validates, gates, runs, and renders. */
   async run(): Promise<Outcome> {
-    const { cli, root, args, flags, session, mode } = this.#state
+    const { cli, root, args, flags, mode } = this.#state
     try {
       if (args[0] === COMPLETE_COMMAND) {
-        await session.text(complete(cli, root, args.slice(1)))
-        return { exitCode: 0, result: undefined, signal: undefined }
+        return await this.#text(complete(cli, root, args.slice(1)))
       }
       const routed = route(root, args, cli.aliases)
       if (flags.version) {
-        await session.text(`${cli.version}\n`)
-        return { exitCode: 0, result: undefined, signal: undefined }
+        return await this.#text(`${cli.version}\n`)
       }
       if (routed.kind === 'unknown') {
         this.#groupHelp = groupHelp(cli, routed.group, routed.path, true)
@@ -257,14 +262,15 @@ class Invocation {
       }
       if (routed.kind === 'builtin') {
         return routed.name === 'schema'
-          ? await this.#schema(routed.consumed)
-          : await this.#completion(routed.consumed)
+          ? await this.#schema(routed.rest)
+          : await this.#completion(routed.rest)
       }
       const { node, path } = routed
       if (node.kind === 'group') {
         if (flags.help || mode.format === 'human') {
-          await session.text(groupHelp(cli, node, path, Boolean(mode.agent)))
-          return { exitCode: 0, result: undefined, signal: undefined }
+          return await this.#text(
+            groupHelp(cli, node, path, Boolean(mode.agent))
+          )
         }
         this.#groupHelp = groupHelp(cli, node, path, true)
         throw missingCommand(cli, node, path)
@@ -272,17 +278,12 @@ class Invocation {
       const spec = resolveSpec(node, path.join(' '))
       this.#spec = spec
       if (flags.help) {
-        await session.text(commandHelp(cli, spec, Boolean(mode.agent)))
-        return { exitCode: 0, result: undefined, signal: undefined }
+        return await this.#text(commandHelp(cli, spec, Boolean(mode.agent)))
       }
       if (this.#state.modeIssues.length > 0) {
-        throw new CliError({
-          code: 'invalid_input',
-          message: `${this.#state.modeIssues[0]?.path}: ${this.#state.modeIssues[0]?.message}.`,
-          details: this.#state.modeIssues,
-        })
+        throw invalidInput(this.#state.modeIssues)
       }
-      const outcome = await this.#command(spec, routed.consumed)
+      const outcome = await this.#command(spec, routed.rest)
       await this.#skillsNotice(path)
       return outcome
     } catch (error) {
@@ -330,21 +331,20 @@ class Invocation {
     }
     const result = errorResult(cliError, command)
     const extras: RenderExtras = {}
-    if (cliError.code === 'invalid_input' && this.#spec) {
-      extras.usage = usage(cli, this.#spec)
-      extras.help = commandHelp(cli, this.#spec, true)
-    } else if (cliError.code === 'invalid_input') {
-      extras.help = this.#groupHelp
+    if (cliError.code === 'invalid_input') {
+      const spec = this.#spec
+      extras.usage = spec && usage(cli, spec)
+      extras.help = spec ? commandHelp(cli, spec, true) : this.#groupHelp
     }
     return await this.#finish(this.#checked(result, cliError.data), extras)
   }
 
   /** Handles the built-in `schema` command. */
-  async #schema(consumed: number[]): Promise<Outcome> {
-    const { cli, root, args, session, mode } = this.#state
-    const words = builtinWords(args, consumed, 'schema', ['--list'])
-    const node = words.length > 0 ? findNode(root, words) : undefined
-    if (words.length > 0 && !node) {
+  async #schema(rest: string[]): Promise<Outcome> {
+    const { cli, root, mode } = this.#state
+    const words = builtinWords(rest, 'schema', ['--list'])
+    const node = findNode(root, words)
+    if (!node) {
       throw unknownCommand(cli, {
         kind: 'unknown',
         group: root,
@@ -357,28 +357,22 @@ class Invocation {
       })
     }
     const result =
-      node?.kind === 'command'
+      node.kind === 'command'
         ? commandSchema(cli, resolveSpec(node, words.join(' ')))
         : listSchema(cli, node, words)
-    if (mode.format === 'human') {
-      await session.text(`${JSON.stringify(result, null, 2)}\n`)
-    } else {
-      await session.text(`${JSON.stringify(result)}\n`)
-    }
-    return {
-      exitCode: 0,
-      result: result as ResultObject,
-      signal: undefined,
-    }
+    const indent = mode.format === 'human' ? 2 : undefined
+    const outcome = await this.#text(
+      `${JSON.stringify(result, null, indent)}\n`
+    )
+    return { ...outcome, result: result as ResultObject }
   }
 
   /** Handles the built-in `completion` command. */
-  async #completion(consumed: number[]): Promise<Outcome> {
-    const { cli, args, session, mode, flags } = this.#state
-    const words = builtinWords(args, consumed, 'completion', ['--help', '-h'])
+  async #completion(rest: string[]): Promise<Outcome> {
+    const { cli, mode, flags } = this.#state
+    const words = builtinWords(rest, 'completion', ['--help', '-h'])
     if (flags.help || (words.length === 0 && mode.format === 'human')) {
-      await session.text(completionHelp(cli.name))
-      return { exitCode: 0, result: undefined, signal: undefined }
+      return await this.#text(completionHelp(cli.name))
     }
     const shell = words[0]
     if (words.length !== 1 || !isShell(shell)) {
@@ -401,15 +395,19 @@ class Invocation {
         ],
       })
     }
-    await session.text(completionScript(cli.name, shell))
-    return { exitCode: 0, result: undefined, signal: undefined }
+    return await this.#text(completionScript(cli.name, shell))
+  }
+
+  /** Writes text such as help to stdout and returns a successful outcome. */
+  async #text(text: string): Promise<Outcome> {
+    await this.#state.session.text(text)
+    return TEXT_OUTCOME
   }
 
   /** Validates input, applies the confirmation gate, and runs the handler. */
-  async #command(spec: CommandSpec, consumed: number[]): Promise<Outcome> {
-    const { cli, args, io, session, signal, mode } = this.#state
+  async #command(spec: CommandSpec, rest: string[]): Promise<Outcome> {
+    const { cli, io, session, signal, mode } = this.#state
     const { command } = spec
-    const rest = args.filter((_, index) => !consumed.includes(index))
     const {
       value: input,
       sources,
@@ -455,11 +453,10 @@ class Invocation {
       )
     }
     const data = value.data
-    const { ok: _ok, error: _error, next: _next, ...fields } = data
     let checked = this.#checked(
       {
         ok: true,
-        ...fields,
+        ...withoutReserved(data),
         ...(value.next?.length ? { next: value.next } : {}),
       },
       data
@@ -473,27 +470,26 @@ class Invocation {
         )
       }
     }
+    const human = command.human ?? formatData
     return await this.#finish(checked, {
-      human: checked.ok
-        ? command.human
-          ? command.human(data)
-          : formatData(data)
-        : undefined,
+      human: checked.ok ? human(data) : undefined,
     })
   }
 
   /** After a human-mode command, suggests updating project skills installed by another version. */
   async #skillsNotice(path: string[]): Promise<void> {
     const { cli, mode, session } = this.#state
-    if (!cli.skills || mode.format !== 'human' || mode.agent) {
-      return
-    }
-    if (path[0] === 'skills') {
+    if (
+      !cli.skills ||
+      mode.format !== 'human' ||
+      mode.agent ||
+      path[0] === 'skills'
+    ) {
       return
     }
     try {
       const { staleNotice } = await import('./skills.run.ts')
-      const notice = await staleNotice(cli, cli.skills)
+      const notice = await staleNotice(cli, skillsPath(cli.skills))
       if (notice) {
         session.log(notice)
         await session.flush()
@@ -518,6 +514,10 @@ class Invocation {
       return
     }
     if (mode.interactive) {
+      // Loaded on use, so other invocations never pay for node:readline.
+      const { createInterface } = process.getBuiltinModule(
+        'node:readline/promises'
+      )
       const readline = createInterface({
         input: io.stdin,
         output: io.stderr as NodeJS.WritableStream,
@@ -557,17 +557,15 @@ class Invocation {
 
   /** Renders the interrupted result for a signal. */
   async #interrupted(signalName: NodeJS.Signals): Promise<Outcome> {
-    const command = this.#spec?.command
-    const next = this.#checkpoint?.next
-    const result: ResultObject = {
-      ok: false,
-      error: {
+    const result = errorResult(
+      new CliError({
         code: 'interrupted',
         message: `Interrupted by ${signalName}.`,
-        retryable: Boolean(command?.readOnly || command?.idempotent),
-      },
-      ...(next?.length ? { next } : {}),
-    }
+        retryable: this.#spec?.command.idempotent === true,
+        next: this.#checkpoint?.next,
+      }),
+      undefined
+    )
     const outcome = await this.#finish(result, {})
     return { ...outcome, signal: signalName }
   }
@@ -577,7 +575,7 @@ class Invocation {
     if (!this.#state.strict) {
       return result
     }
-    const command = this.#spec?.command
+    const spec = this.#spec
     if (data) {
       const reserved = RESERVED_KEYS.filter((key) => key in data)
       if (reserved.length > 0) {
@@ -586,17 +584,14 @@ class Invocation {
         )
       }
     }
-    const error = result.error as
-      | { code: string; retryable: boolean }
-      | undefined
-    if (error && command) {
-      const known = [...(command.errors ?? []), ...BUILTIN_ERROR_CODES]
-      if (!known.includes(error.code)) {
+    const { error } = result
+    if (error && spec) {
+      if (!spec.errors.includes(error.code)) {
         return contractViolation(
           `error code "${error.code}" is not declared in errors`
         )
       }
-      if (error.retryable && !(command.readOnly || command.idempotent)) {
+      if (error.retryable && !spec.command.idempotent) {
         return contractViolation(
           `"${error.code}" is retryable but the command is neither readOnly nor idempotent`
         )
@@ -619,9 +614,7 @@ function errorResult(
 ): ResultObject {
   const retryable =
     error.retryable ??
-    (TRANSIENT_ERROR_CODES.has(error.code) &&
-      Boolean(command?.readOnly || command?.idempotent))
-  const { ok: _ok, error: _error, next: _next, ...data } = error.data ?? {}
+    (TRANSIENT_ERROR_CODES.has(error.code) && command?.idempotent === true)
   return {
     ok: false,
     error: {
@@ -633,21 +626,30 @@ function errorResult(
         : { retryAfterSeconds: error.retryAfterSeconds }),
       ...(error.details === undefined ? {} : { details: error.details }),
     },
-    ...data,
+    ...withoutReserved(error.data ?? {}),
     ...(error.next?.length ? { next: error.next } : {}),
   }
 }
 
+/** Returns command data without the envelope's reserved keys. */
+function withoutReserved(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => !RESERVED_KEYS.includes(key))
+  )
+}
+
 /** Builds the `internal_error` result for a broken command contract in strict mode. */
 function contractViolation(message: string): ResultObject {
-  return {
-    ok: false,
-    error: {
+  return errorResult(
+    new CliError({
       code: 'internal_error',
       message: `Contract violation: ${message}.`,
       retryable: false,
-    },
-  }
+    }),
+    undefined
+  )
 }
 
 /** Builds the error for an unknown command word. */
@@ -706,20 +708,19 @@ function missingCommand(
  * and rejecting flags the built-in does not accept.
  */
 function builtinWords(
-  args: string[],
-  consumed: number[],
+  rest: string[],
   name: string,
   accepted: string[]
 ): string[] {
-  const rest = args.filter((_, index) => !consumed.includes(index))
   const words: string[] = []
   for (let index = 0; index < rest.length; index++) {
     const arg = rest[index] as string
-    if (arg === '--format') {
+    const token = frameworkToken(arg, BUILTIN_IGNORED_FLAGS)
+    if (token === 'value') {
       index++ // its value was read by the mode resolution
       continue
     }
-    if (accepted.includes(arg) || isFrameworkToken(arg)) {
+    if (token || accepted.includes(arg)) {
       continue
     }
     if (arg.startsWith('-')) {
@@ -732,14 +733,6 @@ function builtinWords(
     words.push(arg)
   }
   return words
-}
-
-/** Returns `true` for framework flags that built-in commands ignore. */
-function isFrameworkToken(arg: string): boolean {
-  return (
-    ['--json', '--agent', '--no-agent', '--debug'].includes(arg) ||
-    arg.startsWith('--format=')
-  )
 }
 
 /** Lists each input value and its source for `--debug`, redacting secrets. */
