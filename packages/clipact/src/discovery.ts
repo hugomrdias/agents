@@ -10,7 +10,7 @@ import {
 } from './define.ts'
 import { leaves } from './help.ts'
 import { fromJsonSchema } from './json-schema.ts'
-import { closest, findNode, unknownCommand } from './route.ts'
+import { closest, route, unknownCommand } from './route.ts'
 import { type CommandSpec, type JsonSchema, resolveSpec } from './spec.ts'
 
 /** Input of the built-in `schema` command. */
@@ -151,7 +151,12 @@ export function schemaCommand(cli: CliOptions, root: Group): SchemaCommand {
   })
   const handler = defineHandler(command, ({ input, ok }) => {
     const words = input.command ?? []
-    const node = findNode(root, words)
+    // Route like a command line, so an alias resolves to its canonical path.
+    const routed = route(root, words, cli.aliases)
+    const node =
+      routed.kind === 'node' && routed.rest.length === 0
+        ? routed.node
+        : undefined
     if (!node) {
       throw unknownCommand(cli, {
         kind: 'unknown',
@@ -164,10 +169,11 @@ export function schemaCommand(cli: CliOptions, root: Group): SchemaCommand {
         ),
       })
     }
+    const path = routed.kind === 'node' ? routed.path : words
     const { ok: _ok, ...data } =
       node.kind === 'command'
-        ? commandSchema(cli, resolveSpec(node, words.join(' ')))
-        : listSchema(cli, node, words)
+        ? commandSchema(cli, resolveSpec(node, path.join(' ')))
+        : listSchema(cli, node, path)
     return ok(data)
   })
   return markBuiltin(command, { commandPath: 'command' })

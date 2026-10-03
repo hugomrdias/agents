@@ -567,6 +567,18 @@ describe('discovery', () => {
     assert.equal((put.input as { type: string }).type, 'object')
   })
 
+  test('schema resolves an alias to the canonical command', async () => {
+    const alias = assertContract(await invoke(cli, ['schema', 'publish']))
+    const canonical = assertContract(
+      await invoke(cli, ['schema', 'artifacts', 'put'])
+    )
+    assert.deepEqual(alias, canonical)
+    const extra = assertContract(
+      await invoke(cli, ['schema', 'publish', 'extra'])
+    )
+    assert.equal((extra.error as { code: string }).code, 'invalid_input')
+  })
+
   test('schema shows help like any command', async () => {
     for (const flag of ['--help', '-h']) {
       const result = await invoke(cli, ['schema', flag])

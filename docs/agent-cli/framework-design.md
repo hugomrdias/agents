@@ -1,6 +1,6 @@
 # CLI framework design
 
-Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md), along with shell completions and skills; the other services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `foc` and future CLIs get the output contract, agent behavior, and startup performance by default.
+Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md), along with shell completions and skills; the other services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `fil` and future CLIs get the output contract, agent behavior, and startup performance by default.
 
 ## Goals
 
@@ -295,6 +295,6 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 ## Milestones
 
 1. **Core** (implemented): definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
-2. **Spike**: build `foc artifacts put` and `foc operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI.
+2. **Spike**: build `fil artifacts put` and `fil operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI. The prototype, now named `fil`, runs on clipact ([architecture](architecture.md)); the harness runs remain.
 3. **Services**: telemetry, gating and dry-run polish, startup budget in CI. Skills are implemented.
 4. **Later**: `--events`. Shell completions are implemented.
