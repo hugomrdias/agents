@@ -6,7 +6,7 @@ import type { Cli, Outcome } from './cli.ts'
 import { commandSchema } from './discovery.ts'
 import { leaves } from './help.ts'
 import type { OutputStream } from './io.ts'
-import { resolveSpec } from './spec.ts'
+import { JSON_SCHEMA_TARGET, resolveSpec } from './spec.ts'
 
 /** Captured output of one invocation. */
 export interface RunResult {
@@ -151,12 +151,53 @@ export function exec(
   })
 }
 
+/** Keys a result may have; exactly one of `data` and `error` comes first. */
+const ENVELOPE_KEYS = ['data', 'error', 'next']
+
+/** Keys of `error`, with a check for each value. */
+const ERROR_FIELDS: Record<string, (value: unknown) => boolean> = {
+  code: (value) => typeof value === 'string',
+  message: (value) => typeof value === 'string',
+  retryable: (value) => typeof value === 'boolean',
+  retryAfterSeconds: (value) => typeof value === 'number' && value >= 0,
+  details: () => true,
+}
+
+/** Keys of a `next` step, with a check for each value. */
+const NEXT_FIELDS: Record<string, (value: unknown) => boolean> = {
+  by: (value) => value === 'agent' || value === 'user',
+  description: (value) => typeof value === 'string',
+  command: (value) => typeof value === 'string',
+}
+
+/** Asserts that `value` is an object with the `required` keys and only valid `fields`. */
+function assertFields(
+  value: unknown,
+  fields: Record<string, (value: unknown) => boolean>,
+  required: string[],
+  name: string
+): void {
+  assert.ok(
+    value !== null && typeof value === 'object' && !Array.isArray(value),
+    `${name} must be an object`
+  )
+  for (const key of required) {
+    assert.ok(key in value, `${name} must have "${key}"`)
+  }
+  for (const [key, field] of Object.entries(value)) {
+    assert.ok(key in fields, `${name} has an unknown key "${key}"`)
+    assert.ok(fields[key]?.(field), `${name}.${key} is invalid`)
+  }
+}
+
 /**
  * Asserts the output contract: stdout is exactly one compact JSON object
- * with a boolean `ok`, the exit code matches `ok`, stdout has no ANSI codes,
- * and stderr has no JSON results. Returns the parsed result.
+ * that matches the result envelope schema, with exactly one of `data` and
+ * `error` as its first key; the exit code is 0 with `data` and 1 with
+ * `error`; stdout has no ANSI codes; and stderr has no JSON results. Returns
+ * the parsed result.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#output-contract
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#output-contract
  */
 export function assertContract(result: RunResult): Record<string, unknown> {
   const lines = result.stdout.split('\n')
@@ -171,12 +212,44 @@ export function assertContract(result: RunResult): Record<string, unknown> {
     json && typeof json === 'object' && !Array.isArray(json),
     'stdout must be a JSON object'
   )
-  assert.equal(typeof json.ok, 'boolean', '"ok" must be a boolean')
+  const keys = Object.keys(json)
+  assert.ok(
+    keys[0] === 'data' || keys[0] === 'error',
+    'the first key must be "data" or "error"'
+  )
+  assert.ok(
+    !('data' in json && 'error' in json),
+    'a result has exactly one of "data" and "error"'
+  )
+  assert.deepEqual(
+    keys.filter((key) => !ENVELOPE_KEYS.includes(key)),
+    [],
+    'a result has no keys besides "data", "error", and "next"'
+  )
+  if ('data' in json) {
+    assert.ok(
+      json.data !== null && typeof json.data === 'object',
+      '"data" must be an object or an array'
+    )
+  } else {
+    assertFields(
+      json.error,
+      ERROR_FIELDS,
+      ['code', 'message', 'retryable'],
+      'error'
+    )
+  }
+  if ('next' in json) {
+    assert.ok(Array.isArray(json.next), '"next" must be an array')
+    for (const [index, step] of json.next.entries()) {
+      assertFields(step, NEXT_FIELDS, ['by', 'description'], `next[${index}]`)
+    }
+  }
   if (result.signal === null) {
     assert.equal(
       result.exitCode,
-      json.ok ? 0 : 1,
-      'exit code must be 0 if ok, else 1'
+      'error' in json ? 1 : 0,
+      'exit code must be 0 with "data" and 1 with "error"'
     )
   }
   for (const line of result.stderr.split('\n')) {
@@ -191,13 +264,39 @@ export function assertContract(result: RunResult): Record<string, unknown> {
   return json
 }
 
-/** Resolves every command definition and throws one error listing all problems. */
+/**
+ * Resolves every command definition, checks that each error code is in the
+ * CLI's registry, and converts every output and `details` schema to JSON
+ * Schema; throws one error listing all problems.
+ */
 export function assertDefinitions(cli: Cli): void {
   const problems: string[] = []
+  for (const [code, definition] of Object.entries(cli.errors)) {
+    try {
+      definition.details?.['~standard'].jsonSchema.output(JSON_SCHEMA_TARGET)
+    } catch (error) {
+      problems.push(
+        `Invalid error "${code}": the details schema cannot be converted to JSON Schema: ${(error as Error).message}`
+      )
+    }
+  }
   for (const { path, command } of leaves(cli.root)) {
     try {
       // Output schemas convert lazily; convert them here to catch problems.
-      void resolveSpec(command, path).outputJsonSchema
+      const spec = resolveSpec(command, path)
+      const type = spec.outputJsonSchema?.type
+      if (type !== undefined && type !== 'object' && type !== 'array') {
+        problems.push(
+          `Invalid definition for "${path}": output must be an object or an array schema`
+        )
+      }
+      for (const code of spec.errors) {
+        if (!(code in cli.errors)) {
+          problems.push(
+            `Invalid definition for "${path}": error code "${code}" is not in the CLI's errors registry`
+          )
+        }
+      }
     } catch (error) {
       problems.push((error as Error).message)
     }
@@ -210,7 +309,7 @@ export function schemas(cli: Cli): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
     leaves(cli.root).map(({ path, command }) => [
       path,
-      commandSchema(cli.options, resolveSpec(command, path)),
+      commandSchema(cli.options, resolveSpec(command, path), cli.errors),
     ])
   )
 }

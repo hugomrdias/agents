@@ -29,11 +29,15 @@ export {
 } from './define.ts'
 export {
   BUILTIN_ERROR_CODES,
+  BUILTIN_ERRORS,
   CliError,
   type CliErrorOptions,
   type ErrorBody,
+  type ErrorDefinition,
+  type ErrorRegistry,
   type InputIssue,
   isCliError,
   type Next,
 } from './errors.ts'
 export type { Io, OutputStream } from './io.ts'
+export type { DataResult, ErrorResult, ResultObject } from './session.ts'

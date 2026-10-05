@@ -1,6 +1,6 @@
 # CLI framework design
 
-Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../packages/clipact/README.md), along with shell completions and skills; the other services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](agent-cli-guidelines.md) once, so `fil` and future CLIs get the output contract, agent behavior, and startup performance by default.
+Date: 2026-10-01. Status: the core (milestone 1) is implemented in [`packages/clipact`](../../packages/clipact/README.md), along with shell completions and skills; the other services are not. Name: `clipact`. Scope: a small Node.js library that implements the [CLI guidelines for agents](guidelines.md) once, so any agent-facing CLI gets the output contract, agent behavior, and startup performance by default.
 
 ## Goals
 
@@ -65,7 +65,7 @@ export const put = defineCommand({
   env: { network: 'ACME_NETWORK', privateKey: 'ACME_PRIVATE_KEY' },
   secrets: ['privateKey'],
   output: z.object({ ref: z.string(), url: z.string().url() }),
-  errors: ['insufficient_funds', 'storage_partial', 'publication_pending'],
+  errors: ['insufficient_funds', 'storage_partial', 'publication_pending'], // codes from the CLI's registry
   confirm: (input) => `Commits storage funds for ${input.copies} copies.`,
   dryRun: true,
   handler: () => import('./put.run.js'),
@@ -98,6 +98,7 @@ export default defineHandler(put, async (ctx) => {
 
 ```ts
 // main.ts
+import * as z from 'zod'
 import { defineCli, defineGroup } from 'clipact'
 import { put } from './commands/artifacts/put.js'
 
@@ -107,6 +108,14 @@ defineCli({
   envPrefix: 'ACME', // names framework variables: ACME_OUTPUT, ACME_AGENT, ACME_TELEMETRY
   commands: [defineGroup({ name: 'artifacts', description: 'Publish and manage artifacts', commands: [put] })],
   aliases: { publish: 'artifacts put' },
+  errors: {
+    insufficient_funds: { description: 'The payer account cannot cover the storage lockup.' },
+    storage_partial: {
+      description: 'Fewer copies were committed than requested; resume the operation.',
+      details: z.object({ operationId: z.string(), committed: z.number().int() }),
+    },
+    publication_pending: { description: 'Stored, but the link does not serve the content yet.' },
+  },
   skills: new URL('../skills/', import.meta.url),
   telemetry: { send: () => import('./telemetry.js') },
   mapError: () => import('./map-error.js'),
@@ -155,7 +164,7 @@ An alias resolves to the same definition, so help, schema, and telemetry report 
 6. **Merge and validate**: convert string values to the JSON Schema type (number, integer), then merge with `--input <file|->` JSON. A field supplied both on the command line and in `--input` is an `invalid_input` error listing the fields; framework flags (`--json`, `--yes`, `--dry-run`, `--agent`) are never part of the input. Only one source may read stdin, so `--input -` together with a `-` positional is also `invalid_input`. Fill fields still missing from their `env` variables, reading only the variables of the command being run and converting them like flag values. Validate the merged object with `~standard.validate`, which applies schema defaults. All issues become one `invalid_input` error with `details: [{ path, source, message }]`, where `source` is `flag`, `positional`, `input`, `env:ACME_NETWORK`, or `default`.
 7. **Gate** commands whose `confirm` returns a reason for this input: prompt when a human is present, otherwise require `--yes` or return `confirmation_required` with `details: { reason }` and a `by: "user"` step. Agent detection never relaxes this. `--dry-run` sets `ctx.dryRun` for commands that declare support and skips the gate.
 8. **Load and run** the handler with `ctx`: typed `input`, `signal`, `mode`, `progress()`, `log()` (stderr), `checkpoint()`, `ok()`.
-9. **Normalize**: a returned `ok()` becomes `{ ok: true, ...data, next? }`; a `CliError` becomes its error result; an abort becomes `interrupted` with the `next` steps from the latest checkpoint; any other thrown value is passed to the lazily loaded `mapError` hook, if configured, and becomes the returned `CliError` or otherwise `internal_error` (stack only with `--debug`). In tests, outputs are validated against the output schema and error codes against `errors`.
+9. **Normalize**: a returned `ok()` becomes `{ data, next? }`; a `CliError` becomes `{ error, next? }`; an abort becomes `interrupted` with the `next` steps from the latest checkpoint; any other thrown value is passed to the lazily loaded `mapError` hook, if configured, and becomes the returned `CliError` or otherwise `internal_error` (stack only with `--debug`). In tests, `data` is validated against the output schema, error codes against the command's `errors`, and `details` against the registry's schema for the code.
 10. **Render once**: machine mode writes the single-line JSON in one write; human mode writes the result to stdout and errors with `next` steps to stderr. Set `process.exitCode`; on interruption, re-raise the signal after the write callback.
 11. **After the result**: lazily load and queue telemetry, and print a stale-skill notice in human mode.
 
@@ -175,12 +184,22 @@ type ErrorBody = {
 }
 
 /** The single JSON object written to stdout in machine mode. */
-type Result<T extends object> =
-  | ({ ok: true; next?: Next[] } & T)
-  | ({ ok: false; error: ErrorBody; next?: Next[] } & Partial<T>)
+type Result<T extends object | unknown[]> =
+  | { data: T; next?: Next[] }
+  | { error: ErrorBody; next?: Next[] }
+
+/** One entry of the CLI's error registry. */
+type ErrorDefinition = {
+  description: string
+  details?: Schema
+}
 ```
 
-`ok`, `error`, and `next` are reserved keys in command output. `CliError` carries the error body and `next`. Built-in codes: `invalid_input`, `confirmation_required`, `interrupted`, `internal_error`, and the transient codes `rate_limited`, `service_unavailable`, and `timeout`. Applications declare the rest per command.
+The envelope follows the guidelines' [Result envelope](guidelines.md#result-envelope). The framework writes exactly one of `data` and `error`, first, then `next`, and no other top-level keys. The exit code is `0` with `data` and `1` with `error`. Command output lives under `data`, so it cannot collide with envelope keys. `ctx.ok()` without an argument produces `data: {}`, and `data` may be an array when the output schema says so. `CliError` carries the error body and `next`, and has no `data` option: a failed command returns no `data`, and recovery context goes in `details`.
+
+Error codes are declared once, in `defineCli({ errors })`, a map from code to an `ErrorDefinition`. `details` is a Standard Schema, like `input` and `output`. Commands list the codes they can return by name. `defineCli` throws a `TypeError` for a registry entry that redefines a built-in code, and `assertDefinitions` rejects a command code that is missing from the registry. The built-in codes are `invalid_input`, `confirmation_required`, `interrupted`, `internal_error`, and the transient codes `rate_limited`, `service_unavailable`, and `timeout`; `skill_conflict` joins them when the framework's `skills` commands are installed. The registry is built once and exposed as `cli.errors`. Each has a description, and `invalid_input` (`[{ path, source?, message }]`), `confirmation_required` (`{ reason }`), and `skill_conflict` have `details` schemas.
+
+`schema <command>` publishes `output` as the JSON Schema of `data`, and `errors` as a map from each code the command can return to its description and `details` JSON Schema. `schema --list` adds `result`, the JSON Schema of the envelope, with `data` unconstrained and `error` and `next` fully specified.
 
 `retryable` defaults to `false`. When a handler throws a transient code without setting `retryable`, the framework sets it to `true` for `readOnly` or `idempotent` commands and leaves it `false` otherwise, because repeating a non-idempotent command may repeat its side effects; those errors should carry a `next` step that inspects or resumes the work instead. The testing helpers flag `retryable: true` on a command that is neither `readOnly` nor `idempotent`.
 
@@ -202,14 +221,14 @@ Help is rendered from definitions in two styles:
 | `--agent`, `--no-agent` | Override detection |
 | `--yes`, `--dry-run`, `--input <file\|->` | Gating and input, when the command supports them |
 | `--debug` | Stack traces, each input value's source (secrets redacted), and telemetry errors on stderr |
-| `schema [command…]`, `schema --list` | JSON Schema for input, output, and errors, with positionals, environment variable names, and secret fields; the command tree |
+| `schema [command…]`, `schema --list` | JSON Schema for input and for `data`, and error codes with descriptions and `details` schemas, with positionals, environment variable names, and secret fields; the command tree and the envelope's JSON Schema |
 | `completion bash\|zsh\|fish` | A shell script that asks the hidden `__complete <words…>` built-in for candidates on each Tab |
 | `skills install\|status\|uninstall` | Install the bundled skill per the guidelines, when `skills` is configured |
 | `telemetry status\|enable\|disable` | Telemetry controls, when `telemetry` is configured |
 
 ## Runtime services
 
-- **Signals and exit**: implemented as in [Signal handling](agent-cli-guidelines.md#signal-handling) and [Exit and stream hygiene](agent-cli-guidelines.md#exit-and-stream-hygiene). `ctx.signal` is passed to all handler I/O. `ctx.checkpoint({ id, next })` registers a long-running job: the framework prints the ID to stderr immediately, so it survives a SIGKILL, and includes the `next` steps in an `interrupted` result.
+- **Signals and exit**: implemented as in [Signal handling](guidelines.md#signal-handling) and [Exit and stream hygiene](guidelines.md#exit-and-stream-hygiene). `ctx.signal` is passed to all handler I/O. `ctx.checkpoint({ id, next })` registers a long-running job: the framework prints the ID to stderr immediately, so it survives a SIGKILL, and includes the `next` steps in an `interrupted` result.
 - **Progress**: `ctx.progress({ phase, message, data? })` takes structured objects from the start. It draws a spinner on a human TTY and writes a plain stderr line at most every 15 s in agent mode. A later NDJSON `--events` mode can emit the same objects without handler changes.
 - **Framework state**: a small file in the platform state directory holds only framework-owned state: the telemetry choice and whether its notice was shown. It is not a configuration layer for command input.
 - **Telemetry**: the framework decides enablement (`DO_NOT_TRACK`, `ACME_TELEMETRY`, the stored choice from `telemetry disable`), builds the event (command path, flag names, outcome, error code, duration, versions, agent, mode), shows the first-run notice, supports `ACME_TELEMETRY=log`, and hands the event to the application's lazily loaded sender after the result is written.
@@ -219,10 +238,10 @@ Help is rendered from definitions in two styles:
 
 `clipact/testing` exports helpers for the Node test runner:
 
-- `invoke(cli, argv, { env, stdin, tty, signal })` runs in process with captured streams and an empty environment, so the runner's agent variables do not leak in. It enables strict checks: outputs must match the output schema, error codes must be declared, data may not use the envelope keys, and only `readOnly` or `idempotent` commands may return `retryable: true`.
+- `invoke(cli, argv, { env, stdin, tty, signal })` runs in process with captured streams and an empty environment, so the runner's agent variables do not leak in. It enables strict checks: `data` must match the output schema, error codes must be declared by the command, `details` must match the registry's schema for the code, and only `readOnly` or `idempotent` commands may return `retryable: true`.
 - `exec(bin, argv, { env, stdin, kill })` spawns an entry file without a TTY and with only `PATH` set, optionally sending a signal once stderr shows a given text. Both return `{ stdout, stderr, exitCode, signal, json }`.
-- `assertContract(result)`: stdout is exactly one compact JSON object with a boolean `ok`; `exitCode` equals `ok ? 0 : 1`; stdout has no ANSI codes; stderr has no JSON.
-- `assertDefinitions(cli)` resolves every command and reports all definition errors; `schemas(cli)` returns every command's `schema` output for snapshot tests.
+- `assertContract(result)`: stdout is exactly one compact JSON object that matches the envelope schema (`data` is an object or an array, and `error` and each `next` step have only their documented fields), with exactly one of `data` and `error` as its first key; `exitCode` is `0` with `data` and `1` with `error`; stdout has no ANSI codes; stderr has no JSON.
+- `assertDefinitions(cli)` resolves every command, converts every output and `details` schema to JSON Schema, and reports all definition errors, including an output schema that is not an object or an array; `schemas(cli)` returns every command's `schema` output for snapshot tests.
 - Not yet implemented: a startup check that runs `--version` and `schema --list` against a budget relative to `node -e ''`.
 
 ## Performance budget
@@ -280,6 +299,8 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 
 | Question | Decision | Reason |
 | --- | --- | --- |
+| Result envelope | `{ data, next? }` or `{ error, next? }`; closed; no `ok` field and no partial `data` on failure | Nesting avoids collisions with envelope keys and allows arrays; the presence of `data` or `error` is the outcome, so no second field can disagree; failure context belongs in `error.details`. See the guidelines' [Result envelope](guidelines.md#result-envelope). |
+| Error codes | A CLI-level registry of `{ description, details? }`; commands list codes by name | Agents learn what a code means and what `details` holds before they first see it; one definition per code keeps descriptions consistent across commands. |
 | How commands declare positional arguments | One `input` object schema plus an ordered `positionals` list of field names | One schema serves validation, `schema`, `--input`, and help; errors and help use names instead of tuple indexes; positionals are shell shorthand, while agents use named fields. |
 | `--input` JSON versus flags | Merge; a field given in both is `invalid_input` | `--input` is the request, not a configuration file, so silently dropping either value is worse than failing with the field names. |
 | NDJSON `--events` | Deferred; `ctx.progress()` is structured from v1 | Agents need the final result and an early operation ID, which stderr and `operations` commands already provide; wrappers can get `--events` later without handler changes. |
@@ -295,6 +316,6 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 ## Milestones
 
 1. **Core** (implemented): definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, testing helpers.
-2. **Spike**: build `fil artifacts put` and `fil operations resume` on the core; run the guideline tests in Claude Code, Codex, and Gemini CLI. The prototype, now named `fil`, runs on clipact ([architecture](architecture.md)); the harness runs remain.
+2. **Spike**: validate the core on a real CLI, including a long-running, resumable command; run the guideline tests in Claude Code, Codex, and Gemini CLI. A real CLI runs on clipact; the harness runs remain.
 3. **Services**: telemetry, gating and dry-run polish, startup budget in CI. Skills are implemented.
 4. **Later**: `--events`. Shell completions are implemented.

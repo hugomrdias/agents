@@ -9,4 +9,10 @@ export const cli = defineCli({
   commands,
   aliases: { publish: 'artifacts put' },
   mapError: () => import('./map-error.ts'),
+  errors: {
+    insufficient_funds: {
+      description: 'The payer cannot cover the storage lockup.',
+    },
+    not_found: { description: 'No artifact with that ID.' },
+  },
 })

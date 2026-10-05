@@ -231,7 +231,7 @@ function lazy(create: (run: typeof import('./skills.run.ts')) => Handler) {
  * Builds the `skills` group that installs the skills bundled in `source`, a
  * directory of `<name>/SKILL.md` skill directories.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#a-setup-command
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#a-setup-command
  */
 export function skillsGroup(cli: CliOptions, skills: URL | string): Group {
   const source = skillsPath(skills)

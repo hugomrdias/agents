@@ -15,7 +15,7 @@ import {
 
 /** The output contract, repeated in agent help. */
 const CONTRACT =
-  'Output is one JSON object on stdout; exit code 0 when "ok" is true, else 1.'
+  'Output is one JSON object on stdout: "data" on success (exit code 0) or "error" on failure (exit code 1), then optional "next" steps.'
 
 /** A leaf command with its full path. */
 export interface Leaf {

@@ -1,7 +1,7 @@
 /**
  * Runs the built binary through many valid and invalid invocations and
  * checks the agent output contract on each: one JSON line on stdout, exit
- * code 0 exactly when `ok` is true, no ANSI codes, no JSON on stderr, and
+ * code 0 exactly when the result has `data`, no ANSI codes, no JSON on stderr, and
  * the secret token never printed.
  */
 import assert from 'node:assert/strict'
@@ -82,13 +82,13 @@ test('every invocation honors the output contract', async () => {
     const label = `launchpad ${args.join(' ')}`
     const result = await exec(BIN, args, { env: { ...env, ...extra }, stdin })
     const json = assertContract(result)
-    const actual = json.ok ? 'ok' : (json.error as { code: string }).code
+    const actual = 'data' in json ? 'ok' : (json.error as { code: string }).code
     assert.equal(actual, expected, `${label}: ${result.stdout}`)
     assert.ok(
       !(result.stdout + result.stderr).includes(TOKEN),
       `${label} printed the token`
     )
-    if (!json.ok) {
+    if ('error' in json) {
       assert.match(
         result.stderr,
         /^launchpad: /,

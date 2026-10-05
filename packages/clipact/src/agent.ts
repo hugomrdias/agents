@@ -28,7 +28,7 @@ export function isSet(value: string | undefined): value is string {
  *
  * Detection is heuristic and only changes presentation defaults.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#agent-detection-and-help
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#agent-detection-and-help
  */
 export function detectAgent(env: Env): string | false {
   for (const variable of ['AI_AGENT', 'AGENT']) {

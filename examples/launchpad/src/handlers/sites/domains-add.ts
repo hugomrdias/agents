@@ -10,12 +10,13 @@ export default defineHandler(addDomains, async (ctx) => {
   }
   const pending = domains.filter((domain) => !domain.verified)
   if (pending.length > 0) {
-    // Partial result: the domains are attached, but the command's promise
-    // (working custom domains) needs a human to change DNS first.
+    // The domains are attached, but the command's promise (working custom
+    // domains) needs a human to change DNS first. A failed result carries no
+    // data, so the domains go in details for the agent to report.
     throw new CliError({
       code: 'verification_pending',
       message: `${pending.length} domain(s) need a DNS TXT record before they serve traffic.`,
-      data: { domains },
+      details: { domains },
       next: [
         ...pending.map((domain) => ({
           by: 'user' as const,

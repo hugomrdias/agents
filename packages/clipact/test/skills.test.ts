@@ -46,9 +46,17 @@ beforeEach(async () => {
 /** SHA-256 of a string, as manifests record it. */
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 
-/** Runs a `skills` command and returns its checked JSON result. */
+/** Runs a `skills` command that succeeds and returns the checked result. */
+async function skillsResult(...args: string[]) {
+  const result = await invoke(cli, ['skills', ...args])
+  const json = assertContract(result)
+  assert.ok('data' in json, `expected data: ${result.stdout}`)
+  return json as { data: Record<string, unknown>; next?: unknown }
+}
+
+/** Runs a `skills` command that succeeds and returns the result's `data`. */
 async function skills(...args: string[]) {
-  return assertContract(await invoke(cli, ['skills', ...args]))
+  return (await skillsResult(...args)).data
 }
 
 /** Runs a command in human mode, after which the stale skill notice may print. */
@@ -71,7 +79,6 @@ describe('skills install', () => {
   test('copies each bundled skill to both project directories with a manifest', async () => {
     const result = await skills('install')
     assert.deepEqual(result, {
-      ok: true,
       scope: 'project',
       skills: [
         {
@@ -220,14 +227,14 @@ describe('skills install', () => {
 
 describe('skills status', () => {
   test('reports missing copies in both scopes and suggests installing', async () => {
-    const result = await skills('status')
+    const { data: result, next } = await skillsResult('status')
     const copies = result.skills as { scope: string; status: string }[]
     assert.deepEqual(
       copies.map((copy) => `${copy.scope}:${copy.status}`),
       ['project:missing', 'project:missing', 'global:missing', 'global:missing']
     )
     assert.equal(result.version, '1.2.3')
-    assert.deepEqual(result.next, [
+    assert.deepEqual(next, [
       {
         by: 'agent',
         command: 'acme skills install',
@@ -248,7 +255,7 @@ describe('skills status', () => {
     await mkdir(join(home, '.claude/skills/acme'), { recursive: true })
     await writeFile(join(home, '.claude/skills/acme/SKILL.md'), 'theirs')
 
-    const result = await skills('status')
+    const { data: result, next } = await skillsResult('status')
     assert.deepEqual(
       (
         result.skills as {
@@ -265,7 +272,7 @@ describe('skills status', () => {
         ['global', 'claude', 'unmanaged', undefined],
       ]
     )
-    assert.deepEqual(result.next, [
+    assert.deepEqual(next, [
       {
         by: 'agent',
         command: 'acme skills install',
@@ -275,12 +282,16 @@ describe('skills status', () => {
   })
 
   test('limits the report to one scope', async () => {
-    const result = await skills('status', '--scope', 'global')
+    const { data: result, next } = await skillsResult(
+      'status',
+      '--scope',
+      'global'
+    )
     assert.deepEqual(
       (result.skills as { scope: string }[]).map((copy) => copy.scope),
       ['global', 'global']
     )
-    assert.deepEqual(result.next, [
+    assert.deepEqual(next, [
       {
         by: 'agent',
         command: 'acme skills install --scope global',
@@ -548,7 +559,7 @@ describe('skills safety', () => {
     await chmod(join(source, 'tool/SKILL.md'), 0o444)
     const updated = assertContract(
       await invoke(readOnly, ['skills', 'install', '--target', 'claude'])
-    )
+    ).data as Record<string, unknown>
     assert.equal((updated.skills as { action: string }[])[0]?.action, 'updated')
     const path = join(project, '.claude/skills/tool/SKILL.md')
     assert.equal(await readFile(path, 'utf8'), 'v2')

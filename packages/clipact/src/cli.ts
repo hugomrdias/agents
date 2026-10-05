@@ -17,6 +17,8 @@ import { schemaCommand } from './discovery.ts'
 import {
   CliError,
   DefinitionError,
+  type ErrorRegistry,
+  errorRegistry,
   type InputIssue,
   isCliError,
   TRANSIENT_ERROR_CODES,
@@ -33,6 +35,7 @@ import {
 } from './route.ts'
 import {
   formatData,
+  isErrorResult,
   type RenderExtras,
   type ResultObject,
   Session,
@@ -42,9 +45,6 @@ import { type CommandSpec, resolveSpec } from './spec.ts'
 
 /** Signals that cancel the running command. */
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
-
-/** Keys of the result envelope that command data may not use. */
-const RESERVED_KEYS = ['ok', 'error', 'next']
 
 /** The outcome of a command that printed text, such as help. */
 const TEXT_OUTCOME: Outcome = {
@@ -68,7 +68,7 @@ export interface ExecuteOptions {
   signal?: AbortSignal
   /** Rejects with an uncaught error, which then becomes `internal_error`. */
   crash?: Promise<never>
-  /** Checks results against output schemas and declared error codes. */
+  /** Checks results against output schemas, declared error codes, and `details` schemas. */
   strict?: boolean
 }
 
@@ -79,6 +79,8 @@ export interface Cli {
   readonly root: Group
   /** Framework variable prefix, such as `ACME`. */
   readonly envPrefix: string
+  /** The full error registry: the framework's codes and the CLI's `errors`. */
+  readonly errors: Readonly<ErrorRegistry>
   /** Runs with the real process: installs signal and crash handlers and sets the exit code. */
   run(argv?: string[]): Promise<void>
   /** Runs one invocation against the given streams without touching the process. */
@@ -88,11 +90,14 @@ export interface Cli {
 /**
  * Defines a CLI from its command tree.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/cli-framework-design.md
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/framework-design.md
  */
 export function defineCli(definition: CliOptions): Cli {
   const defines = (name: string) =>
     definition.commands.some((node) => node.name === name)
+  // An application's own `skills` command replaces the framework's.
+  const skills = defines('skills') ? undefined : definition.skills
+  const errors = errorRegistry(definition.errors, Boolean(skills))
   const commands = [...definition.commands]
   const options: CliOptions = { ...definition, commands }
   const root: Group = {
@@ -101,11 +106,11 @@ export function defineCli(definition: CliOptions): Cli {
     description: options.description ?? '',
     commands,
   }
-  if (definition.skills && !defines('skills')) {
-    commands.push(skillsGroup(definition, definition.skills))
+  if (skills) {
+    commands.push(skillsGroup(definition, skills))
   }
   if (!defines('schema')) {
-    commands.push(schemaCommand(options, root))
+    commands.push(schemaCommand(options, root, errors))
   }
   if (!defines('completion')) {
     commands.push(completionCommand(options))
@@ -138,6 +143,7 @@ export function defineCli(definition: CliOptions): Cli {
       controller,
       signal,
       strict: executeOptions.strict === true,
+      errors,
     })
     const work = invocation.run()
     try {
@@ -156,6 +162,7 @@ export function defineCli(definition: CliOptions): Cli {
     options,
     root,
     envPrefix,
+    errors,
     execute,
     async run(argv = process.argv) {
       const controller = new AbortController()
@@ -217,6 +224,8 @@ interface InvocationState {
   /** Aborted by `controller` or the caller's signal. */
   signal: AbortSignal
   strict: boolean
+  /** The full error registry, built-in codes included. */
+  errors: Readonly<ErrorRegistry>
 }
 
 /** Runs the execution pipeline for one argv. */
@@ -321,7 +330,7 @@ class Invocation {
       extras.usage = spec && usage(cli, spec)
       extras.help = spec ? commandHelp(cli, spec, true) : this.#groupHelp
     }
-    return await this.#finish(this.#checked(result, cliError.data), extras)
+    return await this.#finish(await this.#checked(result), extras)
   }
 
   /** Writes text such as help to stdout and returns a successful outcome. */
@@ -379,29 +388,30 @@ class Invocation {
       )
     }
     const data = value.data
-    let checked = this.#checked(
-      {
-        ok: true,
-        ...withoutReserved(data),
-        ...(value.next?.length ? { next: value.next } : {}),
-      },
-      data
-    )
+    let checked = await this.#checked({
+      data,
+      ...(value.next?.length ? { next: value.next } : {}),
+    })
     const output: Schema | undefined = command.output
-    if (this.#state.strict && output && checked.ok) {
-      const validation = await output['~standard'].validate(data)
-      if (validation.issues) {
-        checked = contractViolation(
-          `output does not match the schema: ${validation.issues.map((issue) => issue.message).join('; ')}`
-        )
+    if (this.#state.strict && !isErrorResult(checked)) {
+      if (typeof data !== 'object' || data === null) {
+        checked = contractViolation('data must be an object or an array')
+      } else if (output) {
+        const validation = await output['~standard'].validate(data)
+        if (validation.issues) {
+          checked = contractViolation(
+            `output does not match the schema: ${validation.issues.map((issue) => issue.message).join('; ')}`
+          )
+        }
       }
     }
     const human = command.human ?? formatData
-    if (checked.ok && printsPlainText(command)) {
+    const succeeded = !isErrorResult(checked)
+    if (succeeded && printsPlainText(command)) {
       return await this.#text(human(data) ?? '')
     }
     return await this.#finish(checked, {
-      human: checked.ok ? human(data) : undefined,
+      human: succeeded ? human(data) : undefined,
     })
   }
 
@@ -500,21 +510,13 @@ class Invocation {
   }
 
   /** In strict mode, replaces a result that breaks the command's contract. */
-  #checked(result: ResultObject, data?: Record<string, unknown>): ResultObject {
-    if (!this.#state.strict) {
+  async #checked(result: ResultObject): Promise<ResultObject> {
+    if (!this.#state.strict || !isErrorResult(result)) {
       return result
     }
-    const spec = this.#spec
-    if (data) {
-      const reserved = RESERVED_KEYS.filter((key) => key in data)
-      if (reserved.length > 0) {
-        return contractViolation(
-          `output uses reserved keys: ${reserved.join(', ')}`
-        )
-      }
-    }
     const { error } = result
-    if (error && spec) {
+    const spec = this.#spec
+    if (spec) {
       if (!spec.errors.includes(error.code)) {
         return contractViolation(
           `error code "${error.code}" is not declared in errors`
@@ -526,17 +528,30 @@ class Invocation {
         )
       }
     }
+    const details = this.#state.errors[error.code]?.details
+    if (details && error.details !== undefined) {
+      const validation = await details['~standard'].validate(error.details)
+      if (validation.issues) {
+        return contractViolation(
+          `details of "${error.code}" do not match the schema: ${validation.issues.map((issue) => issue.message).join('; ')}`
+        )
+      }
+    }
     return result
   }
 
   /** Renders a result and returns the outcome. */
   async #finish(result: ResultObject, extras: RenderExtras): Promise<Outcome> {
     await this.#state.session.render(result, extras)
-    return { exitCode: result.ok ? 0 : 1, result, signal: undefined }
+    return {
+      exitCode: isErrorResult(result) ? 1 : 0,
+      result,
+      signal: undefined,
+    }
   }
 }
 
-/** Builds an error result, applying the default `retryable` rules; data cannot override reserved keys. */
+/** Builds an error result, applying the default `retryable` rules. */
 function errorResult(
   error: CliError,
   command: AnyCommand | undefined
@@ -545,7 +560,6 @@ function errorResult(
     error.retryable ??
     (TRANSIENT_ERROR_CODES.has(error.code) && command?.idempotent === true)
   return {
-    ok: false,
     error: {
       code: error.code,
       message: error.message,
@@ -555,18 +569,8 @@ function errorResult(
         : { retryAfterSeconds: error.retryAfterSeconds }),
       ...(error.details === undefined ? {} : { details: error.details }),
     },
-    ...withoutReserved(error.data ?? {}),
     ...(error.next?.length ? { next: error.next } : {}),
   }
-}
-
-/** Returns command data without the envelope's reserved keys. */
-function withoutReserved(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(data).filter(([key]) => !RESERVED_KEYS.includes(key))
-  )
 }
 
 /** Builds the `internal_error` result for a broken command contract in strict mode. */
@@ -592,7 +596,12 @@ function missingCommand(
     code: 'invalid_input',
     message: `Missing command after "${[cli.name, ...path].join(' ')}".`,
     retryable: false,
-    details: { commands },
+    details: [
+      {
+        path: 'command',
+        message: `Expected one of: ${commands.join(', ')}`,
+      },
+    ],
     next: [
       {
         by: 'agent',

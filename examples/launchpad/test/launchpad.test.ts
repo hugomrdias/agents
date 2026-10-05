@@ -17,10 +17,11 @@ const BIN = fileURLToPath(new URL('../bin/launchpad.js', import.meta.url))
 const env = { LAUNCHPAD_TOKEN: 'lp_test' }
 let site: string
 
-/** Runs the CLI in process and returns the asserted result. */
+/** Runs the CLI in process and returns the asserted result and its `data`. */
 async function run(args: string[], options: Parameters<typeof invoke>[2] = {}) {
   const result = await invoke(cli, args, { env, ...options })
-  return { ...result, json: assertContract(result) }
+  const json = assertContract(result)
+  return { ...result, json, data: (json.data ?? {}) as Record<string, unknown> }
 }
 
 /** Returns the error code of a result. */
@@ -64,7 +65,7 @@ describe('sites', () => {
         env: { ...env, LAUNCHPAD_REGION: 'eu' },
       }
     )
-    const alpha = created.json.site as {
+    const alpha = created.data.site as {
       id: string
       region: string
       framework: string
@@ -79,16 +80,16 @@ describe('sites', () => {
     await run(['sites', 'create', 'gamma'])
 
     const got = await run(['sites', 'get', 'beta'])
-    assert.deepEqual((got.json.site as { meta: unknown }).meta, {
+    assert.deepEqual((got.data.site as { meta: unknown }).meta, {
       owner: 'web',
     })
 
     const page = await run(['ls', '--limit', '2'])
     assert.deepEqual(
-      (page.json.sites as { name: string }[]).map((s) => s.name),
+      (page.data.sites as { name: string }[]).map((s) => s.name),
       ['alpha', 'beta']
     )
-    assert.equal(page.json.nextCursor, '2')
+    assert.equal(page.data.nextCursor, '2')
     assert.deepEqual(page.json.next, [
       {
         by: 'agent',
@@ -141,7 +142,7 @@ describe('sites', () => {
     ])
   })
 
-  test('domains return a partial result that needs the user', async () => {
+  test('pending domains fail with the domains in details and a user step', async () => {
     const result = await run([
       'sites',
       'domains',
@@ -151,10 +152,12 @@ describe('sites', () => {
       'shop.com',
     ])
     assert.equal(code(result.json), 'verification_pending')
+    const { details } = result.json.error as {
+      details: { domains: { name: string; verified: boolean }[] }
+    }
+    assert.equal('data' in result.json, false)
     assert.deepEqual(
-      (result.json.domains as { name: string; verified: boolean }[]).map(
-        (d) => [d.name, d.verified]
-      ),
+      details.domains.map((d) => [d.name, d.verified]),
       [
         ['a.example', true],
         ['shop.com', false],
@@ -171,7 +174,7 @@ describe('sites', () => {
       'alpha',
       'a.example',
     ])
-    assert.equal(verified.json.ok, true)
+    assert.ok('data' in verified.json)
   })
 
   test('delete requires confirmation, previews with --dry-run, and runs with --yes', async () => {
@@ -184,9 +187,9 @@ describe('sites', () => {
       'launchpad sites delete gamma --yes'
     )
     const preview = await run(['sites', 'delete', 'gamma', '--dry-run'])
-    assert.equal(preview.json.deleted, false)
+    assert.equal(preview.data.deleted, false)
     const deleted = await run(['sites', 'delete', 'gamma', '--yes'])
-    assert.equal(deleted.json.deleted, true)
+    assert.equal(deleted.data.deleted, true)
     assert.equal(code((await run(['sites', 'get', 'gamma'])).json), 'not_found')
   })
 })
@@ -194,14 +197,14 @@ describe('sites', () => {
 describe('deploys', () => {
   test('dry run reports the plan without creating a deployment', async () => {
     const result = await run(['deploy', 'alpha', site, '--dry-run'])
-    const deployment = result.json.deployment as { files: number; id: string }
-    assert.equal(result.json.dryRun, true)
+    const deployment = result.data.deployment as { files: number; id: string }
+    assert.equal(result.data.dryRun, true)
     assert.equal(deployment.files, 2)
   })
 
   test('uploads folders and reports missing paths at once', async () => {
     const result = await run(['deploys', 'create', 'alpha', site])
-    const deployment = result.json.deployment as {
+    const deployment = result.data.deployment as {
       status: string
       uploaded: number
       id: string
@@ -233,7 +236,7 @@ describe('deploys', () => {
       '--yes',
     ])
     assert.equal(
-      (confirmed.json.deployment as { url: string }).url,
+      (confirmed.data.deployment as { url: string }).url,
       'https://alpha.launchpad.example'
     )
   })
@@ -264,11 +267,12 @@ describe('built binary', () => {
       env: { ...binEnv(), CLAUDECODE: '1' },
     })
     assert.deepEqual(assertContract(whoami), {
-      ok: true,
-      team: 'personal',
-      agent: 'claude-code',
-      format: 'json',
-      interactive: false,
+      data: {
+        team: 'personal',
+        agent: 'claude-code',
+        format: 'json',
+        interactive: false,
+      },
     })
   })
 
@@ -286,14 +290,19 @@ describe('built binary', () => {
     const id = resume.split(' ').at(-1) as string
     const status = await exec(BIN, ['deploys', 'status', id], { env: binEnv() })
     assert.equal(
-      (assertContract(status).deployment as { status: string }).status,
+      (
+        (assertContract(status).data as Record<string, unknown>).deployment as {
+          status: string
+        }
+      ).status,
       'uploading'
     )
 
     const resumed = await exec(BIN, ['deploys', 'resume', id], {
       env: binEnv(),
     })
-    const deployment = assertContract(resumed).deployment as {
+    const deployment = (assertContract(resumed).data as Record<string, unknown>)
+      .deployment as {
       status: string
       uploaded: number
     }

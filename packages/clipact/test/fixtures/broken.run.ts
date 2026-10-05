@@ -19,11 +19,11 @@ export default defineHandler(broken, async (ctx) => {
       retryable: true,
     })
   }
-  if (ctx.input.kind === 'data') {
+  if (ctx.input.kind === 'details') {
     throw new CliError({
-      code: 'timeout',
-      message: 'Timed out.',
-      data: { ok: true, error: 'hidden', next: [], partial: 'kept' },
+      code: 'invalid_input',
+      message: 'Bad input.',
+      details: { reason: 'not a list of issues' },
     })
   }
   if (ctx.input.kind === 'bigint') {

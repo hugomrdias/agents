@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { describe, test } from 'node:test'
+import * as z from 'zod'
+import { RESULT_SCHEMA } from '../src/discovery.ts'
 import {
+  BUILTIN_ERROR_CODES,
   type Command,
   defineCli,
   defineCommand,
@@ -20,15 +23,22 @@ import { cli } from './fixtures/cli.ts'
 
 const KEY = { ACME_PRIVATE_KEY: 'secret-key-value' }
 
+/** Asserts the contract and a successful result, and returns its `data`. */
+function dataOf(
+  result: Parameters<typeof assertContract>[0]
+): Record<string, unknown> {
+  const json = assertContract(result)
+  assert.ok('data' in json, `expected data: ${result.stdout}`)
+  return json.data as Record<string, unknown>
+}
+
 describe('results', () => {
   test('writes one JSON result with defaults, positionals, and next steps', async () => {
     const result = await invoke(cli, ['artifacts', 'put', './a.txt'], {
       env: KEY,
     })
     assert.deepEqual(assertContract(result), {
-      ok: true,
-      ref: 'ref-2',
-      url: 'https://example.com/./a.txt',
+      data: { ref: 'ref-2', url: 'https://example.com/./a.txt' },
       next: [
         {
           by: 'agent',
@@ -46,9 +56,9 @@ describe('results', () => {
       ['artifacts', 'put', 'a', '--copies', '3', '--tags', 'x', '--tags=y'],
       { env: KEY }
     )
-    const json = assertContract(result)
-    assert.equal(json.ref, 'ref-3')
-    assert.deepEqual(json.tags, ['x', 'y'])
+    const data = dataOf(result)
+    assert.equal(data.ref, 'ref-3')
+    assert.deepEqual(data.tags, ['x', 'y'])
   })
 
   test('assigns variadic positionals and boolean flags', async () => {
@@ -61,26 +71,23 @@ describe('results', () => {
       '--force',
     ])
     assert.deepEqual(assertContract(result), {
-      ok: true,
-      id: 'id1',
-      labels: ['a', 'b'],
-      force: true,
+      data: { id: 'id1', labels: ['a', 'b'], force: true },
     })
   })
 
   test('accepts positional fields as flags', async () => {
     const result = await invoke(cli, ['artifacts', 'get', '--id', 'x1'])
-    assert.equal(assertContract(result).id, 'x1')
+    assert.equal(dataOf(result).id, 'x1')
   })
 
   test('resolves aliases to the canonical command', async () => {
     const result = await invoke(cli, ['publish', 'a'], { env: KEY })
-    assert.equal(assertContract(result).ref, 'ref-2')
+    assert.equal(dataOf(result).ref, 'ref-2')
   })
 
   test('accepts framework flags before the command path', async () => {
     const result = await invoke(cli, ['--json', 'artifacts', 'get', 'x'])
-    assert.equal(assertContract(result).id, 'x')
+    assert.equal(dataOf(result).id, 'x')
   })
 
   test('renders human output and next steps on the right streams', async () => {
@@ -230,7 +237,7 @@ describe('--input', () => {
         stdin: '{"path":"site","copies":4}',
       }
     )
-    assert.equal(assertContract(result).ref, 'ref-4')
+    assert.equal(dataOf(result).ref, 'ref-4')
   })
 
   test('reads a file and rejects fields given twice', async () => {
@@ -280,7 +287,6 @@ describe('confirmation and dry runs', () => {
       env: mainnet,
     })
     assert.deepEqual(assertContract(result), {
-      ok: false,
       error: {
         code: 'confirmation_required',
         message: 'Spends mainnet funds for 2 copies. Confirm with --yes.',
@@ -311,11 +317,11 @@ describe('confirmation and dry runs', () => {
     const yes = await invoke(cli, ['artifacts', 'put', 'a', '--yes'], {
       env: mainnet,
     })
-    assert.equal(assertContract(yes).ok, true)
+    assert.ok('data' in assertContract(yes))
     const dry = await invoke(cli, ['artifacts', 'put', 'a', '--dry-run'], {
       env: mainnet,
     })
-    assert.equal(assertContract(dry).ref, 'dry-run')
+    assert.equal(dataOf(dry).ref, 'dry-run')
   })
 
   test('rejects --yes and --dry-run on commands that do not support them', async () => {
@@ -342,7 +348,6 @@ describe('errors', () => {
       env: KEY,
     })
     assert.deepEqual(assertContract(result), {
-      ok: false,
       error: {
         code: 'insufficient_funds',
         message: 'The payer cannot cover the lockup.',
@@ -429,9 +434,13 @@ describe('errors', () => {
     const machine = await invoke(cli, ['artifacts'])
     assert.deepEqual(
       (assertContract(machine).error as { details: unknown }).details,
-      {
-        commands: ['artifacts put', 'artifacts get', 'artifacts label'],
-      }
+      [
+        {
+          path: 'command',
+          message:
+            'Expected one of: artifacts put, artifacts get, artifacts ls, artifacts label',
+        },
+      ]
     )
     const human = await invoke(cli, ['artifacts', '--format', 'human'])
     assert.equal(human.exitCode, 0)
@@ -447,7 +456,7 @@ describe('modes', () => {
       tty: true,
       env: { GEMINI_CLI: '1' },
     })
-    assert.equal(assertContract(agent).id, 'x')
+    assert.equal(dataOf(agent).id, 'x')
     const forced = await invoke(cli, ['artifacts', 'get', 'x', '--no-agent'], {
       tty: true,
       env: { GEMINI_CLI: '1' },
@@ -541,20 +550,23 @@ describe('discovery', () => {
   })
 
   test('lists commands and describes one command', async () => {
-    const list = assertContract(await invoke(cli, ['schema', '--list']))
+    const list = dataOf(await invoke(cli, ['schema', '--list']))
     assert.deepEqual(
       (list.commands as { command: string }[]).map((c) => c.command),
       [
         'artifacts put',
         'artifacts get',
+        'artifacts ls',
         'artifacts label',
         'operations wait',
         'broken',
       ]
     )
-    const put = assertContract(
-      await invoke(cli, ['schema', 'artifacts', 'put'])
+    assert.deepEqual(
+      (list.result as { $defs: Record<string, unknown> }).$defs.error,
+      (RESULT_SCHEMA.$defs as Record<string, unknown>).error
     )
+    const put = dataOf(await invoke(cli, ['schema', 'artifacts', 'put']))
     assert.equal(put.command, 'artifacts put')
     assert.deepEqual(put.positionals, ['path'])
     assert.deepEqual(put.secrets, ['privateKey'])
@@ -565,6 +577,26 @@ describe('discovery', () => {
     assert.deepEqual(put.confirm, { when: 'conditional' })
     assert.deepEqual(put.aliases, ['publish'])
     assert.equal((put.input as { type: string }).type, 'object')
+    assert.equal((put.output as { type: string }).type, 'object')
+    const errors = put.errors as Record<
+      string,
+      { description: string | null; details: { type?: string } | null }
+    >
+    assert.deepEqual(Object.keys(errors), [
+      'insufficient_funds',
+      'invalid_input',
+      'confirmation_required',
+      'interrupted',
+      'internal_error',
+      'rate_limited',
+      'service_unavailable',
+      'timeout',
+    ])
+    assert.deepEqual(errors.insufficient_funds, {
+      description: 'The payer cannot cover the storage lockup.',
+      details: null,
+    })
+    assert.equal(errors.invalid_input?.details?.type, 'array')
   })
 
   test('schema resolves an alias to the canonical command', async () => {
@@ -593,11 +625,11 @@ describe('discovery', () => {
   })
 
   test('schema describes itself but stays out of command lists', async () => {
-    const own = assertContract(await invoke(cli, ['schema', 'schema']))
+    const own = dataOf(await invoke(cli, ['schema', 'schema']))
     assert.equal(own.command, 'schema')
     assert.deepEqual(own.positionals, ['command'])
     assert.equal(own.readOnly, true)
-    const list = assertContract(await invoke(cli, ['schema']))
+    const list = dataOf(await invoke(cli, ['schema']))
     assert.ok(
       !(list.commands as { command: string }[]).some((c) =>
         c.command.startsWith('schema')
@@ -620,7 +652,7 @@ describe('discovery', () => {
       '--format',
       'human',
     ])
-    assert.equal(human.stdout, `${JSON.stringify(json.json, null, 2)}\n`)
+    assert.equal(human.stdout, `${JSON.stringify(json.json?.data, null, 2)}\n`)
   })
 
   test('schema rejects unknown commands and flags', async () => {
@@ -647,8 +679,7 @@ describe('discovery', () => {
       commands: [command],
     })
     assert.deepEqual(assertContract(await invoke(custom, ['schema'])), {
-      ok: true,
-      custom: true,
+      data: { custom: true },
     })
     const help = await invoke(custom, ['--help'])
     assert.match(help.stdout, /Commands:\n {2}schema +Custom schema/)
@@ -658,7 +689,7 @@ describe('discovery', () => {
     const result = await invoke(cli, ['schema', 'artifacts', 'get'], {
       env: { ACME_AGENT: 'maybe' },
     })
-    assert.equal(assertContract(result).ok, true)
+    assert.ok('data' in assertContract(result))
   })
 
   test('definitions are valid and schemas are stable', () => {
@@ -666,6 +697,7 @@ describe('discovery', () => {
     assert.deepEqual(Object.keys(schemas(cli)), [
       'artifacts put',
       'artifacts get',
+      'artifacts ls',
       'artifacts label',
       'operations wait',
       'broken',
@@ -683,7 +715,6 @@ describe('interruption', () => {
     const result = await pending
     assert.equal(result.signal, 'SIGTERM')
     assert.deepEqual(result.json, {
-      ok: false,
       error: {
         code: 'interrupted',
         message: 'Interrupted by SIGTERM.',
@@ -723,7 +754,7 @@ describe('input hardening', () => {
       ['artifacts', 'put', 'a', '--copies', '3e0'],
       { env: KEY }
     )
-    assert.equal(assertContract(scientific).ref, 'ref-3')
+    assert.equal(dataOf(scientific).ref, 'ref-3')
   })
 
   test('rejects control characters on the command line but not in --input', async () => {
@@ -744,7 +775,7 @@ describe('input hardening', () => {
       env: KEY,
       stdin: JSON.stringify({ path: 'line\u0007bell' }),
     })
-    assert.equal(assertContract(input).ok, true)
+    assert.ok('data' in assertContract(input))
   })
 
   test('reports only the cause when --input cannot be used', async () => {
@@ -831,7 +862,7 @@ describe('review fixes', () => {
       env: KEY,
       stdin,
     })
-    assert.equal(assertContract(result).url, 'https://example.com/café')
+    assert.equal(dataOf(result).url, 'https://example.com/café')
   })
 
   test('schema accepts --format with a separate value', async () => {
@@ -841,7 +872,7 @@ describe('review fixes', () => {
       ['--format', 'json', 'schema', 'artifacts', 'get'],
     ]) {
       const result = await invoke(cli, args)
-      assert.equal(assertContract(result).ok, true, args.join(' '))
+      assert.ok('data' in assertContract(result), args.join(' '))
     }
     const human = await invoke(cli, [
       'schema',
@@ -855,19 +886,169 @@ describe('review fixes', () => {
 })
 
 describe('result integrity', () => {
-  test('error data cannot override reserved result keys', async () => {
-    const result = await invoke(cli, ['broken', 'data'], { strict: false })
-    const json = assertContract(result)
-    assert.equal(result.exitCode, 1)
-    assert.equal(json.ok, false)
-    assert.equal((json.error as { code: string }).code, 'timeout')
-    assert.equal(json.partial, 'kept')
-    assert.equal(json.next, undefined)
-    const strict = assertContract(await invoke(cli, ['broken', 'data']))
+  test('returns a bare array as data and formats it for humans', async () => {
+    const result = await invoke(cli, ['artifacts', 'ls'])
+    assert.deepEqual(assertContract(result), {
+      data: [{ id: 'a1' }, { id: 'a2' }],
+    })
+    const human = await invoke(cli, ['artifacts', 'ls', '--format', 'human'])
+    assert.equal(
+      human.stdout,
+      `${JSON.stringify([{ id: 'a1' }, { id: 'a2' }], null, 2)}\n`
+    )
+  })
+
+  test('strict mode checks details against the registry schema', async () => {
+    const loose = await invoke(cli, ['broken', 'details'], { strict: false })
+    assert.deepEqual(assertContract(loose).error, {
+      code: 'invalid_input',
+      message: 'Bad input.',
+      retryable: false,
+      details: { reason: 'not a list of issues' },
+    })
+    const strict = assertContract(await invoke(cli, ['broken', 'details']))
+    assert.match(
+      (strict.error as { message: string }).message,
+      /^Contract violation: details of "invalid_input" do not match the schema/
+    )
+  })
+
+  test('rejects a registry entry that redefines a built-in code', () => {
+    assert.throws(
+      () =>
+        defineCli({
+          name: 'acme',
+          version: '1.0.0',
+          commands: [],
+          errors: { timeout: { description: 'Mine.' } },
+        }),
+      /Error code "timeout" is built in/
+    )
+  })
+
+  test('assertDefinitions reports codes missing from the registry', () => {
+    const command = defineCommand({
+      name: 'x',
+      description: 'X',
+      errors: ['unknown_code'],
+      handler: async () => ({ default: undefined }),
+    })
+    const unregistered = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+    })
+    assert.throws(
+      () => assertDefinitions(unregistered),
+      /error code "unknown_code" is not in the CLI's errors registry/
+    )
+  })
+
+  test('assertDefinitions reports outputs that are not objects and unconvertible details', () => {
+    const command = defineCommand({
+      name: 'x',
+      description: 'X',
+      output: z.string(),
+      errors: ['big'],
+      handler: async () => ({ default: undefined }),
+    })
+    const invalid = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+      errors: {
+        big: { description: 'Big.', details: z.object({ n: z.bigint() }) },
+      },
+    })
+    assert.throws(
+      () => assertDefinitions(invalid),
+      (error: Error) =>
+        /"x": output must be an object or an array schema/.test(
+          error.message
+        ) && /"big": the details schema cannot be converted/.test(error.message)
+    )
+  })
+
+  test('strict mode rejects data that is not an object or an array', async () => {
+    const command: Command = defineCommand({
+      name: 'x',
+      description: 'X',
+      handler: async () => ({
+        default: defineHandler(command, ({ ok }) => ok('text' as never)),
+      }),
+    })
+    const scalar = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+    })
+    const strict = assertContract(await invoke(scalar, ['x']))
     assert.equal(
       (strict.error as { message: string }).message,
-      'Contract violation: output uses reserved keys: ok, error, next.'
+      'Contract violation: data must be an object or an array.'
     )
+    const loose = await invoke(scalar, ['x'], { strict: false })
+    assert.throws(
+      () => assertContract(loose),
+      /"data" must be an object or an array/
+    )
+  })
+
+  test('assertContract checks the fields of error and next', () => {
+    const run = (json: unknown, exitCode: number) => ({
+      exitCode,
+      signal: null,
+      stdout: `${JSON.stringify(json)}\n`,
+      stderr: '',
+      json: json as Record<string, unknown>,
+    })
+    assert.throws(
+      () => assertContract(run({ error: { code: 'x', message: 'X.' } }, 1)),
+      /error must have "retryable"/
+    )
+    assert.throws(
+      () =>
+        assertContract(
+          run(
+            { error: { code: 'x', message: 'X.', retryable: false, ok: 1 } },
+            1
+          )
+        ),
+      /error has an unknown key "ok"/
+    )
+    assert.throws(
+      () => assertContract(run({ data: {}, next: [{ by: 'agent' }] }, 0)),
+      /next\[0\] must have "description"/
+    )
+  })
+
+  test('the registry is exposed once, and an own skills command owns skill_conflict', () => {
+    const skills = new URL('./fixtures/skills/', import.meta.url)
+    const builtIn = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [],
+      skills,
+    })
+    assert.ok('skill_conflict' in builtIn.errors)
+    assert.ok('timeout' in builtIn.errors)
+    assert.ok(Object.isFrozen(BUILTIN_ERROR_CODES))
+
+    const command = defineCommand({
+      name: 'skills',
+      description: 'My skills',
+      errors: ['skill_conflict'],
+      handler: async () => ({ default: undefined }),
+    })
+    const own = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+      skills,
+      errors: { skill_conflict: { description: 'Mine.' } },
+    })
+    assert.equal(own.errors.skill_conflict?.description, 'Mine.')
+    assert.equal(own.errors.skill_conflict?.details, undefined)
   })
 
   test('a result that cannot be serialized becomes internal_error', async () => {

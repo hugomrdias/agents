@@ -8,11 +8,29 @@ export const PROGRESS_INTERVAL_MS = 15_000
 /** Returns the cursor to the line start and erases the line. */
 const CLEAR_LINE = '\r\x1b[2K'
 
-/** A result object as written to stdout in machine mode. */
-export type ResultObject = Record<string, unknown> & {
-  ok: boolean
-  error?: ErrorBody
+/** The result of a successful command. */
+export interface DataResult {
+  data: unknown
   next?: Next[]
+}
+
+/** The result of a failed command. */
+export interface ErrorResult {
+  error: ErrorBody
+  next?: Next[]
+}
+
+/**
+ * A result object as written to stdout in machine mode: exactly one of
+ * `data` and `error`, then optional `next` steps.
+ *
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#result-envelope
+ */
+export type ResultObject = DataResult | ErrorResult
+
+/** Returns `true` for the result of a failed command. */
+export function isErrorResult(result: ResultObject): result is ErrorResult {
+  return 'error' in result
 }
 
 /** What to print besides the result in human mode or on a usage error. */
@@ -97,7 +115,8 @@ export class Session {
     const json =
       this.mode.format === 'json' ? `${JSON.stringify(result)}\n` : undefined
     this.#rendered = true
-    const { error, next } = result
+    const error = isErrorResult(result) ? result.error : undefined
+    const { next } = result
 
     if (json !== undefined) {
       if (error) {
@@ -175,7 +194,13 @@ export class Session {
 }
 
 /** Formats command data for human mode when the command has no formatter. */
-export function formatData(data: Record<string, unknown>): string | undefined {
+export function formatData(data: unknown): string | undefined {
+  if (Array.isArray(data)) {
+    return data.length > 0 ? JSON.stringify(data, null, 2) : undefined
+  }
+  if (data === null || typeof data !== 'object') {
+    return data === undefined ? undefined : String(data)
+  }
   const entries = Object.entries(data).filter(
     ([, value]) => value !== undefined
   )

@@ -7,11 +7,11 @@ const BIN = fileURLToPath(new URL('./fixtures/bin.ts', import.meta.url))
 
 describe('process', () => {
   test('writes one result and exits 0 or 1', async () => {
-    const ok = await exec(BIN, ['artifacts', 'get', 'x'])
-    assert.equal(assertContract(ok).ok, true)
-    assert.equal(ok.exitCode, 0)
+    const succeeded = await exec(BIN, ['artifacts', 'get', 'x'])
+    assert.ok('data' in assertContract(succeeded))
+    assert.equal(succeeded.exitCode, 0)
     const failed = await exec(BIN, ['artifacts', 'get', 'missing'])
-    assert.equal(assertContract(failed).ok, false)
+    assert.ok('error' in assertContract(failed))
     assert.equal(failed.exitCode, 1)
   })
 

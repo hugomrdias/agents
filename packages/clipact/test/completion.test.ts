@@ -63,7 +63,12 @@ describe('__complete', () => {
       'completion\tPrint a bash, zsh, or fish completion script',
     ])
     assert.deepEqual(await values('art'), ['artifacts'])
-    assert.deepEqual(await values('artifacts', ''), ['put', 'get', 'label'])
+    assert.deepEqual(await values('artifacts', ''), [
+      'put',
+      'get',
+      'ls',
+      'label',
+    ])
     assert.deepEqual(await values('--v'), ['--version'])
   })
 
@@ -181,9 +186,11 @@ describe('completion', () => {
 
   test('is described by schema but stays out of command lists', async () => {
     const own = assertContract(await invoke(cli, ['schema', 'completion']))
+      .data as Record<string, unknown>
     assert.deepEqual(own.positionals, ['shell'])
     assert.equal(own.readOnly, true)
     const list = assertContract(await invoke(cli, ['schema', '--list']))
+      .data as Record<string, unknown>
     assert.ok(
       !(list.commands as { command: string }[]).some(
         (entry) => entry.command === 'completion'

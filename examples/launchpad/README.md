@@ -52,7 +52,7 @@ launchpad: started dpl_2; if interrupted, run: launchpad deploys resume dpl_2
 launchpad: upload: 1/20 cli.ts
 ^C
 launchpad: Interrupted by SIGINT.
-{"ok":false,"error":{"code":"interrupted","message":"Interrupted by SIGINT.","retryable":false},"next":[{"by":"agent","command":"launchpad deploys resume dpl_2","description":"Upload the remaining files of this deployment"}]}
+{"error":{"code":"interrupted","message":"Interrupted by SIGINT.","retryable":false},"next":[{"by":"agent","command":"launchpad deploys resume dpl_2","description":"Upload the remaining files of this deployment"}]}
 $ echo $?
 130
 $ node bin/launchpad.js deploys resume dpl_2 --format human
@@ -61,16 +61,16 @@ Deployed 20 files to https://dpl_2--my-blog.launchpad.example
 
 Without `--json`, a terminal gets human output: a rewritten status line while uploading, and the error and next steps on stderr.
 
-**Partial results that need a human.** Attaching `shop.com` succeeds, but the domain cannot serve traffic until someone adds a DNS record, so `ok` is `false`. The result still includes the attached domains:
+**Failures that need a human.** Attaching `shop.com` succeeds, but the domain cannot serve traffic until someone adds a DNS record, so the command fails with `verification_pending`. A failed result carries no `data`, so the attached domains go in `error.details`, whose shape the error registry in [`src/errors.ts`](src/errors.ts) declares:
 
 ```json
-{"ok":false,"error":{"code":"verification_pending","message":"1 domain(s) need a DNS TXT record before they serve traffic.","retryable":false},"domains":[{"name":"blog.example","verified":true,"txtRecord":"launchpad-verify=site_1"},{"name":"shop.com","verified":false,"txtRecord":"launchpad-verify=site_1"}],"next":[{"by":"user","description":"Add a TXT record on shop.com with the value \"launchpad-verify=site_1\""},{"by":"agent","command":"launchpad sites domains add my-blog shop.com","description":"Recheck verification after the DNS change (safe to repeat)"}]}
+{"error":{"code":"verification_pending","message":"1 domain(s) need a DNS TXT record before they serve traffic.","retryable":false,"details":{"domains":[{"name":"blog.example","verified":true,"txtRecord":"launchpad-verify=site_1"},{"name":"shop.com","verified":false,"txtRecord":"launchpad-verify=site_1"}]}},"next":[{"by":"user","description":"Add a TXT record on shop.com with the value \"launchpad-verify=site_1\""},{"by":"agent","command":"launchpad sites domains add my-blog shop.com","description":"Recheck verification after the DNS change (safe to repeat)"}]}
 ```
 
 **Confirmation for agents.** Without a human at the terminal, a production deploy stops and hands the decision to the user:
 
 ```json
-{"ok":false,"error":{"code":"confirmation_required","message":"Replaces the live production site \"my-blog\". Confirm with --yes.","retryable":false,"details":{"reason":"Replaces the live production site \"my-blog\"."}},"next":[{"by":"user","command":"launchpad deploys create my-blog ./dist --prod --yes","description":"Approve this action, then run it with --yes"}]}
+{"error":{"code":"confirmation_required","message":"Replaces the live production site \"my-blog\". Confirm with --yes.","retryable":false,"details":{"reason":"Replaces the live production site \"my-blog\"."}},"next":[{"by":"user","command":"launchpad deploys create my-blog ./dist --prod --yes","description":"Approve this action, then run it with --yes"}]}
 ```
 
 **Error mapping.** [`src/map-error.ts`](src/map-error.ts) is imported only when a handler throws an SDK error, so `--help` and `schema` never load the SDK.
@@ -82,7 +82,8 @@ bin/launchpad.js          entry shim: enableCompileCache, then import('../dist/m
 scripts/build.ts          esbuild: one ESM entry plus a chunk per handler
 scripts/bench.ts          startup timing against node -e ''
 src/main.ts               cli.run()
-src/cli.ts                defineCli: commands, aliases, envPrefix, mapError
+src/cli.ts                defineCli: commands, aliases, envPrefix, mapError, errors
+src/errors.ts             error registry: a description and details schema per code
 src/commands/*.ts         definitions only (zod + clipact)
 src/handlers/**           handlers, loaded lazily per command
 src/map-error.ts          SDK errors → CLI error codes
@@ -107,7 +108,7 @@ test/contract.test.ts     output-contract sweep and module-load tracing against 
 | `schema sites create` | 74.0 ms | +14.4 ms |
 | `sites list` (loads a handler and the SDK) | 73.0 ms | +13.4 ms |
 
-`--version` slightly exceeds the design's 10 ms budget, because the entry chunk loads zod and every definition before routing. A CLI that needs less can precompute help and schema output at build time, as the [design](../../docs/cli-framework-design.md#performance-budget) describes.
+`--version` slightly exceeds the design's 10 ms budget, because the entry chunk loads zod and every definition before routing. A CLI that needs less can precompute help and schema output at build time, as the [design](../../docs/agent-cli/framework-design.md#performance-budget) describes.
 
 ## Tests
 
@@ -115,6 +116,6 @@ test/contract.test.ts     output-contract sweep and module-load tracing against 
 pnpm --filter launchpad-example test
 ```
 
-Tests build first (Turborepo runs `build` before `test`). In-process tests use `invoke`, which also checks every output against its schema and every error code against the command's `errors`. Real-process tests run the bundle with `exec`, including a SIGTERM during an upload followed by `deploys resume`.
+Tests build first (Turborepo runs `build` before `test`). In-process tests use `invoke`, which also checks every output against its schema, every error code against the command's `errors`, and every `details` against the registry's schema. Real-process tests run the bundle with `exec`, including a SIGTERM during an upload followed by `deploys resume`.
 
-[`test/contract.test.ts`](test/contract.test.ts) validates the framework through this example: it runs the built binary through 36 valid and invalid invocations and checks the output contract on each (one JSON line, exit code matching `ok`, no ANSI codes, no JSON on stderr, a stderr summary on failure, the token never printed). It also traces module loading to prove that `--help`, `--version`, and `schema` load only the entry chunks, never a handler or the SDK.
+[`test/contract.test.ts`](test/contract.test.ts) validates the framework through this example: it runs the built binary through 36 valid and invalid invocations and checks the output contract on each (one JSON line with `data` or `error`, an exit code to match, no ANSI codes, no JSON on stderr, a stderr summary on failure, the token never printed). It also traces module loading to prove that `--help`, `--version`, and `schema` load only the entry chunks, never a handler or the SDK.

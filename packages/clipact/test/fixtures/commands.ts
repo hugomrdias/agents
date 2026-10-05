@@ -52,6 +52,15 @@ export const get = defineCommand({
   handler: () => import('./get.run.ts'),
 })
 
+/** Lists artifacts as a bare array. */
+export const ls = defineCommand({
+  name: 'ls',
+  description: 'List artifacts',
+  output: z.array(z.object({ id: z.string() })),
+  readOnly: true,
+  handler: () => import('./ls.run.ts'),
+})
+
 /** Labels an artifact; takes a variadic positional. */
 export const label = defineCommand({
   name: 'label',
@@ -80,7 +89,7 @@ export const broken = defineCommand({
   name: 'broken',
   description: 'Return invalid output',
   input: z.strictObject({
-    kind: z.enum(['output', 'code', 'retryable', 'crash', 'data', 'bigint']),
+    kind: z.enum(['output', 'code', 'retryable', 'crash', 'details', 'bigint']),
   }),
   positionals: ['kind'],
   output: z.object({ ref: z.string() }),
@@ -91,7 +100,7 @@ export const commands = [
   defineGroup({
     name: 'artifacts',
     description: 'Publish and manage artifacts',
-    commands: [put, get, label],
+    commands: [put, get, ls, label],
   }),
   defineGroup({
     name: 'operations',

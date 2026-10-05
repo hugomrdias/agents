@@ -1,10 +1,10 @@
 # clipact
 
-A small framework for Node.js CLIs that agents and humans can both rely on. It implements the [CLI guidelines for agents](../../docs/agent-cli-guidelines.md) once, following the [framework design](../../docs/cli-framework-design.md), so every command gets the same contract by default:
+A small framework for Node.js CLIs that agents and humans can both rely on. It implements the [CLI guidelines for agents](../../docs/agent-cli/guidelines.md) once, following the [framework design](../../docs/agent-cli/framework-design.md), so every command gets the same contract by default:
 
 - one compact JSON result on stdout in machine mode, human text otherwise, and diagnostics on stderr;
-- exit code `0` when `ok` is `true` and `1` otherwise, with signals re-raised as `128 + N`;
-- structured errors with stable codes, a `retryable` flag, and `next` steps for the agent or the user;
+- `data` on success and `error` on failure, with exit code `0` or `1` to match and signals re-raised as `128 + N`;
+- structured errors with stable codes from one registry, a `retryable` flag, and `next` steps for the agent or the user;
 - one input schema that drives flags, positionals, `--input` JSON, environment fallbacks, validation, help, and JSON Schema discovery;
 - agent detection that changes presentation only, and confirmation gates that agents cannot bypass;
 - lazy handlers, so `--help`, `--version`, and `schema` stay fast.
@@ -104,6 +104,9 @@ defineCli({
   commands,
   aliases: { publish: 'artifacts put' },
   mapError: () => import('./map-error.js'),
+  errors: {
+    insufficient_funds: { description: 'The payer cannot cover the storage lockup.' },
+  },
 }).run()
 ```
 
@@ -119,29 +122,28 @@ await import('../dist/main.js')
 
 ```sh
 $ ACME_PRIVATE_KEY=… acme artifacts put ./report.pdf --json
-{"ok":true,"ref":"bafy…","url":"https://example.com/bafy…"}
+{"data":{"ref":"bafy…","url":"https://example.com/bafy…"}}
 ```
 
 ## Features
 
 ### Output contract
 
-Every invocation produces one result object. Command fields sit beside a small envelope:
+Every invocation produces one result object with exactly one of `data` and `error`, then optional `next` steps, and no other top-level keys:
 
 ```json
-{"ok":true,"ref":"ref-2","url":"https://example.com/a","next":[{"by":"agent","command":"acme artifacts get ref-2","description":"Inspect it"}]}
+{"data":{"ref":"ref-2","url":"https://example.com/a"},"next":[{"by":"agent","command":"acme artifacts get ref-2","description":"Inspect it"}]}
 ```
 
 ```json
-{"ok":false,"error":{"code":"insufficient_funds","message":"The payer cannot cover the lockup.","retryable":false},"next":[{"by":"user","command":"acme auth fund","description":"Add funds"}]}
+{"error":{"code":"insufficient_funds","message":"The payer cannot cover the lockup.","retryable":false},"next":[{"by":"user","command":"acme auth fund","description":"Add funds"}]}
 ```
 
-| Field | Meaning |
+| Key | Meaning |
 | --- | --- |
-| `ok` | `true` only when the command succeeded. Decides the exit code. |
-| `error` | `{ code, message, retryable, retryAfterSeconds?, details? }` when `ok` is `false`. |
+| `data` | The value passed to `ctx.ok()`, on success only: an object, or an array when the `output` schema says so. `{}` when the handler passes nothing. |
+| `error` | `{ code, message, retryable, retryAfterSeconds?, details? }`, on failure only. A failed command returns no `data`; recovery context goes in `details` and `next`. |
 | `next` | Optional follow-up steps. `by: "agent"` steps are runnable by the agent; `by: "user"` steps mean a human must act, and the agent should stop and relay them. |
-| Command fields | The handler's data on success, or `CliError.data` as partial results on failure. `ok`, `error`, and `next` are reserved. |
 
 Where things go:
 
@@ -149,11 +151,11 @@ Where things go:
 | --- | --- | --- |
 | stdout | The result as one compact JSON line, written once, after all stderr output | The formatted result on success; nothing on failure |
 | stderr | A one-line summary on failure; progress, logs, and `--debug` | Errors, issue lists, usage, `Next:` steps, progress, logs |
-| Exit code | `0` if `ok`, else `1` | Same |
+| Exit code | `0` with `data`, `1` with `error` | Same |
 
 The process exits by setting `process.exitCode`, never by `process.exit()`, so piped output is never truncated. A closed stdout pipe (`acme … | head`) ends the process quietly.
 
-In human mode, a command's optional `human(data)` formatter renders the result; without one, fields print as `key: value`, with nested values as indented JSON:
+In human mode, a command's optional `human(data)` formatter renders the result; without one, fields print as `key: value`, with nested values as indented JSON, and an array prints as indented JSON:
 
 ```text
 $ acme artifacts put a --format human
@@ -223,7 +225,7 @@ acme: --entri: Unknown flag; did you mean --entry? (and 3 more).
 ```
 
 ```json
-{"ok":false,"error":{"code":"invalid_input","message":"--entri: Unknown flag; did you mean --entry? (and 3 more).","retryable":false,"details":[{"path":"--entri","source":"flag","message":"Unknown flag; did you mean --entry?"},{"path":"path","message":"Required; pass <path> or --path"},{"path":"copies","source":"flag","message":"Too big: expected number to be <=5"},{"path":"privateKey","message":"Required; set ACME_PRIVATE_KEY"}]}}
+{"error":{"code":"invalid_input","message":"--entri: Unknown flag; did you mean --entry? (and 3 more).","retryable":false,"details":[{"path":"--entri","source":"flag","message":"Unknown flag; did you mean --entry?"},{"path":"path","message":"Required; pass <path> or --path"},{"path":"copies","source":"flag","message":"Too big: expected number to be <=5"},{"path":"privateKey","message":"Required; set ACME_PRIVATE_KEY"}]}}
 ```
 
 `--debug` prints each value's source on stderr before the handler runs:
@@ -257,14 +259,29 @@ When `confirm` yields a reason and neither `--yes` nor `--dry-run` was given:
 - **Otherwise**: the command fails without side effects. The `next` step repeats the exact command line with `--yes`, shell-quoted and placed before any `--`:
 
 ```json
-{"ok":false,"error":{"code":"confirmation_required","message":"Spends mainnet funds for 2 copies. Confirm with --yes.","retryable":false,"details":{"reason":"Spends mainnet funds for 2 copies."}},"next":[{"by":"user","command":"acme artifacts put a.txt --yes","description":"Approve this action, then run it with --yes"}]}
+{"error":{"code":"confirmation_required","message":"Spends mainnet funds for 2 copies. Confirm with --yes.","retryable":false,"details":{"reason":"Spends mainnet funds for 2 copies."}},"next":[{"by":"user","command":"acme artifacts put a.txt --yes","description":"Approve this action, then run it with --yes"}]}
 ```
 
 Agent detection never relaxes the gate. `--yes` and `--dry-run` are unknown flags on commands that do not declare `confirm` or `dryRun`.
 
 ### Errors
 
-Throw a `CliError` for expected failures. Its code should be listed in the command's `errors`; strict tests enforce this.
+Declare every error code once, in the `errors` registry of `defineCli`, with a one-sentence description and, when `details` has a fixed shape, a schema for `details`. Each command lists the codes it can return in its own `errors`. `schema <command>` publishes those codes with their descriptions and `details` JSON Schemas, so an agent knows what a code means before it sees one.
+
+```ts
+defineCli({
+  // …
+  errors: {
+    insufficient_funds: { description: 'The payer cannot cover the storage lockup.' },
+    file_not_found: {
+      description: 'A file to publish does not exist.',
+      details: z.array(z.object({ path: z.string(), message: z.string() })),
+    },
+  },
+})
+```
+
+Throw a `CliError` for expected failures. Strict tests check that its code is declared by the command and that its `details` match the registry's schema; `assertDefinitions` checks that every declared code is in the registry. `defineCli` throws a `TypeError` for a registry entry that redefines a built-in code, and exposes the full registry as `cli.errors`.
 
 | Code | Raised by | `retryable` |
 | --- | --- | --- |
@@ -303,7 +320,7 @@ Mistakes in definitions (a missing field, a clash with a framework flag, a handl
 - `ctx.signal` is aborted on the first SIGINT, SIGTERM, or SIGHUP. Pass it to `fetch`, timers, child processes, and SDK calls. When the handler rejects after the abort, the CLI writes an `interrupted` result with the latest checkpoint's `next` steps, then re-raises the signal so the shell sees `130`, `143`, or `129`:
 
 ```json
-{"ok":false,"error":{"code":"interrupted","message":"Interrupted by SIGTERM.","retryable":false},"next":[{"by":"agent","command":"acme operations resume op_1","description":"Resume the operation"}]}
+{"error":{"code":"interrupted","message":"Interrupted by SIGTERM.","retryable":false},"next":[{"by":"agent","command":"acme operations resume op_1","description":"Resume the operation"}]}
 ```
 
 Listeners are registered with `process.once`, so a second signal terminates immediately. Persist operation state as work progresses rather than in a signal handler; harnesses send SIGKILL 50–200 ms after SIGTERM.
@@ -315,14 +332,14 @@ Listeners are registered with `process.once`, so a second signal terminates imme
 | `acme --version` | The version, on stdout |
 | `acme --help`, `acme <group> --help` | Every command below that point, with descriptions |
 | `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, side effects |
-| `acme schema --list` | `{ ok, name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], aliases }` |
-| `acme schema <command>` | `{ ok, command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors, aliases }`, where `input` and `output` are JSON Schema 2020-12 and `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }` |
+| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], aliases, result }`, where `result` is the JSON Schema of the result envelope |
+| `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors, aliases }`, where `input` and `output` are JSON Schema 2020-12 (`output` describes `data`), `errors` maps each code to `{ description, details }`, and `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }` |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
-None of these load handlers, read credentials, or touch the network. In human mode, `schema` pretty-prints its JSON. A group run without a subcommand prints its help for humans and returns `invalid_input` listing its commands for machines. An unknown command suggests the closest name:
+None of these load handlers, read credentials, or touch the network. In human mode, `schema` pretty-prints its `data`. A group run without a subcommand prints its help for humans and returns `invalid_input` listing its commands for machines. An unknown command suggests the closest name:
 
 ```json
-{"ok":false,"error":{"code":"invalid_input","message":"Unknown command \"acme artifact\". Did you mean \"artifacts\"?","retryable":false},"next":[{"by":"agent","command":"acme artifacts --help","description":"Show help for \"artifacts\""},{"by":"agent","command":"acme schema --list","description":"List all commands"}]}
+{"error":{"code":"invalid_input","message":"Unknown command \"acme artifact\". Did you mean \"artifacts\"?","retryable":false},"next":[{"by":"agent","command":"acme artifacts --help","description":"Show help for \"artifacts\""},{"by":"agent","command":"acme schema --list","description":"List all commands"}]}
 ```
 
 Agent help for a command:
@@ -345,7 +362,7 @@ Error codes: not_found, invalid_input, confirmation_required, interrupted, inter
 
 Read-only; safe to retry.
 
-Output is one JSON object on stdout; exit code 0 when "ok" is true, else 1.
+Output is one JSON object on stdout: "data" on success (exit code 0) or "error" on failure (exit code 1), then optional "next" steps.
 Full schema: acme schema artifacts get
 ```
 
@@ -439,6 +456,7 @@ Creates a CLI from its command tree.
 | `aliases` | `Record<string, string>?` | Extra paths for canonical paths, such as `{ publish: 'artifacts put' }`. Multi-word aliases are allowed; help, `schema`, and errors use the canonical path. |
 | `skills` | `URL \| string`? | Directory of bundled skills (`<name>/SKILL.md`); adds the [`skills` commands](#agent-skills). |
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
+| `errors` | `ErrorRegistry?` | Every error code the commands return besides the built-in codes: `{ [code]: { description, details? } }`, where `details` is a `Schema`. See [Errors](#errors). |
 
 The returned `Cli`:
 
@@ -464,8 +482,8 @@ The returned `Cli`:
 | `positionals` | `Field[]?` | Input fields that may be positional, in order. |
 | `env` | `{ [field]?: string }?` | Environment variables used as fallbacks. |
 | `secrets` | `Field[]?` | Fields read only from their `env` variable. |
-| `output` | `Schema?` | Schema of the success data; types `ctx.ok()` and appears in `schema`. |
-| `errors` | `string[]?` | Command-specific error codes. |
+| `output` | `Schema?` | Schema of `data`: an object or an array. Types `ctx.ok()` and appears in `schema`. |
+| `errors` | `string[]?` | Codes from the CLI's `errors` registry the command can return, besides the built-in codes. |
 | `readOnly` | `boolean?` | Changes no state; implies `idempotent`. |
 | `idempotent` | `boolean?` | Safe to repeat with the same input. |
 | `confirm` | `string \| (input) => string \| undefined`? | Confirmation reason. |
@@ -496,12 +514,12 @@ Pairs a handler with its definition for typing. Default-export the result from t
 | `progress({ phase, message, data? })` | Progress on stderr; see [Long-running work](#long-running-work-and-signals). |
 | `log(message)` | Writes a line to stderr in any mode. |
 | `checkpoint({ id, next? })` | Prints the job ID now and uses `next` if interrupted. |
-| `ok(data, { next? }?)` | Creates the success result. `data` is typed by `output`; without an output schema it is optional. |
+| `ok(data, { next? }?)` | Creates the success result. `data` is typed by `output`; without an output schema it is optional and defaults to `{}`. |
 
 ### `CliError`
 
 ```ts
-new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, data?, cause? })
+new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, cause? })
 ```
 
 | Option | Description |
@@ -510,9 +528,8 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, d
 | `message` | One actionable sentence. |
 | `retryable` | Overrides the default from the [errors table](#errors). |
 | `retryAfterSeconds` | Delay before retrying. |
-| `details` | Structured context, such as a list of issues. |
+| `details` | Structured context, such as a list of issues; its shape follows the registry's schema for the code. |
 | `next` | Follow-up steps. |
-| `data` | Partial command output, rendered beside `error`. |
 | `cause` | The underlying error, not rendered. |
 
 `isCliError(value)` also recognizes `CliError` instances from another copy of the module.
@@ -522,7 +539,9 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, d
 | Export | Description |
 | --- | --- |
 | `detectAgent(env): string \| false` | The agent detection used for modes. |
-| `BUILTIN_ERROR_CODES` | The built-in codes, appended to every command's `errors` in help and `schema`. |
+| `BUILTIN_ERRORS`, `BUILTIN_ERROR_CODES` | The built-in codes with their definitions, and their names; appended to every command's `errors` in help and `schema`. |
+| `ErrorDefinition`, `ErrorRegistry` | `{ description, details? }`, and a map from code to definition. |
+| `ResultObject`, `DataResult`, `ErrorResult` | `{ data, next? } \| { error, next? }`, the result written to stdout. |
 | `MapError` | `(error: unknown) => CliError \| undefined \| Promise<…>`. |
 | `Next` | `{ by: 'agent' \| 'user', description, command? }`. |
 | `ErrorBody` | `{ code, message, retryable, retryAfterSeconds?, details? }`. |
@@ -538,13 +557,13 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, d
 | --- | --- |
 | `invoke(cli, args, options?)` | Runs in process with captured streams. Options: `env` (empty by default so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, `strict` (default `true`). Returns `RunResult & { outcome }`. |
 | `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` set. Options: `env`, `stdin`, `keepStdinOpen`, `kill: { signal, when?, afterMs? }` (sends the signal once stderr contains `when`, or after `afterMs`), `timeoutMs`. |
-| `assertContract(result)` | Asserts stdout is exactly one compact JSON object with a boolean `ok`, the exit code matches `ok`, stdout has no ANSI codes, and stderr has no JSON. Returns the parsed result. |
-| `assertDefinitions(cli)` | Resolves every command and fails with all definition errors at once. |
+| `assertContract(result)` | Asserts stdout is exactly one compact JSON object that matches the envelope schema, with exactly one of `data` and `error` as its first key and no keys besides `next`, the exit code is `0` with `data` and `1` with `error`, stdout has no ANSI codes, and stderr has no JSON. Returns the parsed result. |
+| `assertDefinitions(cli)` | Resolves every command and fails with all definition errors at once, including error codes missing from the registry, output schemas that are not an object or an array, and schemas that cannot be converted to JSON Schema. |
 | `schemas(cli)` | Every command's `schema` output keyed by path, for snapshot tests. |
 
 `RunResult` is `{ exitCode, signal, stdout, stderr, json }`; `exitCode` is `null` when the run ended by a signal.
 
-Strict mode, used by `invoke`, turns contract violations into `internal_error` results so tests fail clearly: output that does not match the `output` schema, error codes not in `errors` or the built-ins, data using `ok`, `error`, or `next`, and `retryable: true` from a command that is neither `readOnly` nor `idempotent`.
+Strict mode, used by `invoke`, turns contract violations into `internal_error` results so tests fail clearly: `data` that is not an object or an array, `data` that does not match the `output` schema, error codes not in the command's `errors` or the built-ins, `details` that do not match the registry's schema for the code, and `retryable: true` from a command that is neither `readOnly` nor `idempotent`.
 
 ```ts
 import assert from 'node:assert/strict'
@@ -556,7 +575,7 @@ test('definitions are valid', () => assertDefinitions(cli))
 
 test('put publishes a file', async () => {
   const result = await invoke(cli, ['artifacts', 'put', 'a.txt'], { env: { ACME_PRIVATE_KEY: 'k' } })
-  assert.equal(assertContract(result).ok, true)
+  assert.ok('data' in assertContract(result))
 })
 
 test('SIGTERM yields an interrupted result', async () => {
@@ -584,7 +603,7 @@ Unbundled, the same CLI costs 27–33 ms, mostly from loading zod's modules. Bun
 
 ## Not yet implemented
 
-From the [design](../../docs/cli-framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
+From the [design](../../docs/agent-cli/framework-design.md#milestones): telemetry (`telemetry` commands, `DO_NOT_TRACK`), a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
 
 ## Development
 

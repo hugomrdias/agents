@@ -3,6 +3,7 @@ import pkg from '../package.json' with { type: 'json' }
 import { deploys } from './commands/deploys.ts'
 import { sites } from './commands/sites.ts'
 import { whoami } from './commands/whoami.ts'
+import { errors } from './errors.ts'
 
 /** The launchpad CLI: definitions only, no handlers or SDK imported. */
 export const cli = defineCli({
@@ -14,4 +15,5 @@ export const cli = defineCli({
   aliases: { deploy: 'deploys create', ls: 'sites list' },
   skills: new URL('../skills/', import.meta.url),
   mapError: () => import('./map-error.ts'),
+  errors,
 })

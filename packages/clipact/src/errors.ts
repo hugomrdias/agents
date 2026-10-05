@@ -1,10 +1,13 @@
+import type { Schema } from './define.ts'
+import { fromJsonSchema } from './json-schema.ts'
+
 /**
  * A follow-up step for the agent or the user.
  *
  * A step with `by: 'user'` is the action-required signal: the agent should
  * stop and relay it to a human.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli-guidelines.md#errors-next-steps-and-retries
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
  */
 export interface Next {
   by: 'agent' | 'user'
@@ -28,16 +31,125 @@ export interface InputIssue {
   source?: string
 }
 
+/**
+ * One entry of the CLI's error registry: what a code means and, when its
+ * `details` has a fixed shape, the schema of `details`.
+ *
+ * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
+ */
+export interface ErrorDefinition {
+  /** One sentence, published by `schema <command>`. */
+  description: string
+  /** Schema of `error.details`, checked in strict mode. */
+  details?: Schema
+}
+
+/** Error codes mapped to their definitions. */
+export type ErrorRegistry = Record<string, ErrorDefinition>
+
+/** `details` of `invalid_input`: every problem with the input. */
+const inputIssues = fromJsonSchema<InputIssue[]>({
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      message: { type: 'string' },
+      source: { type: 'string' },
+    },
+    required: ['path', 'message'],
+    additionalProperties: false,
+  },
+})
+
+/** `details` of `confirmation_required`: why the command asks. */
+const confirmationReason = fromJsonSchema<{ reason: string }>({
+  type: 'object',
+  properties: { reason: { type: 'string' } },
+  required: ['reason'],
+  additionalProperties: false,
+})
+
+/** Error codes every command may return, with their definitions. */
+export const BUILTIN_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
+  invalid_input: {
+    description:
+      'The arguments, flags, --input JSON, or environment variables are invalid.',
+    details: inputIssues,
+  },
+  confirmation_required: {
+    description:
+      'The command needs confirmation; a human approves it and runs it with --yes.',
+    details: confirmationReason,
+  },
+  interrupted: {
+    description:
+      'A signal stopped the command; follow the next steps to inspect or resume it.',
+  },
+  internal_error: {
+    description: 'An unexpected failure in the CLI; report it.',
+  },
+  rate_limited: {
+    description: 'A service limited the request rate.',
+  },
+  service_unavailable: {
+    description: 'A service the command depends on is unavailable.',
+  },
+  timeout: {
+    description: 'A request took too long.',
+  },
+})
+
 /** Error codes every command may return. */
-export const BUILTIN_ERROR_CODES = [
-  'invalid_input',
-  'confirmation_required',
-  'interrupted',
-  'internal_error',
-  'rate_limited',
-  'service_unavailable',
-  'timeout',
-] as const
+export const BUILTIN_ERROR_CODES: readonly string[] = Object.freeze(
+  Object.keys(BUILTIN_ERRORS)
+)
+
+/** Error codes of the framework's `skills` commands, registered when they are installed. */
+export const SKILLS_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
+  skill_conflict: {
+    description:
+      'Installed skill directories have local changes, are symbolic links, or were not installed by this CLI.',
+    details: fromJsonSchema({
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          target: { type: 'string', enum: ['agents', 'claude'] },
+          path: { type: 'string' },
+          reason: { type: 'string', enum: ['edited', 'unmanaged', 'symlink'] },
+          files: { type: 'array', items: { type: 'string' } },
+          resolvesTo: { type: 'string' },
+        },
+        required: ['name', 'target', 'path', 'reason'],
+        additionalProperties: false,
+      },
+    }),
+  },
+})
+
+/**
+ * Returns a CLI's full error registry: the framework's codes and its own.
+ * Throws a `TypeError` when the CLI redefines a framework code.
+ *
+ * @param own - The CLI's `errors` option.
+ * @param skills - Whether the framework's `skills` commands are installed.
+ */
+export function errorRegistry(
+  own: ErrorRegistry | undefined,
+  skills: boolean
+): Readonly<ErrorRegistry> {
+  const framework = { ...BUILTIN_ERRORS, ...(skills ? SKILLS_ERRORS : {}) }
+  for (const code of Object.keys(own ?? {})) {
+    if (code in framework) {
+      throw new TypeError(
+        `Error code "${code}" is built in and cannot be redefined`
+      )
+    }
+  }
+  return Object.freeze({ ...framework, ...own })
+}
 
 /** Codes whose `retryable` defaults to `true` for read-only or idempotent commands. */
 export const TRANSIENT_ERROR_CODES: ReadonlySet<string> = new Set([
@@ -55,13 +167,11 @@ export interface CliErrorOptions {
   retryAfterSeconds?: number
   details?: unknown
   next?: Next[]
-  /** Partial command output to include beside the error. */
-  data?: Record<string, unknown>
   cause?: unknown
 }
 
 /**
- * An expected failure with a stable code, rendered as an `ok: false` result.
+ * An expected failure with a stable code, rendered as an `error` result.
  */
 export class CliError extends Error {
   readonly code: string
@@ -69,7 +179,6 @@ export class CliError extends Error {
   readonly retryAfterSeconds: number | undefined
   readonly details: unknown
   readonly next: Next[] | undefined
-  readonly data: Record<string, unknown> | undefined
 
   /** Creates an error from its result fields. */
   constructor(options: CliErrorOptions) {
@@ -80,7 +189,6 @@ export class CliError extends Error {
     this.retryAfterSeconds = options.retryAfterSeconds
     this.details = options.details
     this.next = options.next
-    this.data = options.data
   }
 }
 

@@ -51,7 +51,8 @@ export interface CommandSpec {
   errors: string[]
 }
 
-const JSON_SCHEMA_TARGET = { target: 'draft-2020-12' } as const
+/** The JSON Schema dialect `schema` publishes. */
+export const JSON_SCHEMA_TARGET = { target: 'draft-2020-12' } as const
 
 /** Standard schema for commands without `input`: an empty object. */
 export const EMPTY_INPUT: Schema = fromJsonSchema({
