@@ -32,7 +32,7 @@ export interface ResolvedInput {
  * validates the result against the command's input schema. All problems are
  * reported at once as one `invalid_input` error.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/framework-design.md#execution-pipeline
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/framework-design.md#execution-pipeline
  */
 export async function resolveInput(
   spec: CommandSpec,

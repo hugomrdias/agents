@@ -49,7 +49,7 @@ type SchemaCommand = Command<typeof schemaInput, undefined>
  * JSON Schema of the result envelope: exactly one of `data` and `error`,
  * then optional `next` steps. Each command's `output` describes `data`.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#result-envelope
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#result-envelope
  */
 export const RESULT_SCHEMA: JsonSchema = Object.freeze({
   $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -127,7 +127,7 @@ function summary(path: string, command: AnyCommand): Record<string, unknown> {
  * Builds the `schema --list` data: the command tree with one-line
  * descriptions and the result envelope's JSON Schema, in one call.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#discovery-and-schemas
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#discovery-and-schemas
  */
 export function listSchema(
   cli: CliOptions,
@@ -230,7 +230,7 @@ function redactSecrets(spec: CommandSpec): JsonSchema {
  * Builds the built-in `schema` command, which prints the JSON Schemas of a
  * command, or the command list of the CLI or a group, as one JSON object.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#discovery-and-schemas
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#discovery-and-schemas
  */
 export function schemaCommand(
   cli: CliOptions,

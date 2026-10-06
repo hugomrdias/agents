@@ -24,7 +24,7 @@ export interface ErrorResult {
  * A result object as written to stdout in machine mode: exactly one of
  * `data` and `error`, then optional `next` steps.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#result-envelope
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#result-envelope
  */
 export type ResultObject = DataResult | ErrorResult
 

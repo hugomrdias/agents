@@ -7,7 +7,7 @@ import { fromJsonSchema } from './json-schema.ts'
  * A step with `by: 'user'` is the action-required signal: the agent should
  * stop and relay it to a human.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
  */
 export interface Next {
   by: 'agent' | 'user'
@@ -35,7 +35,7 @@ export interface InputIssue {
  * One entry of the CLI's error registry: what a code means and, when its
  * `details` has a fixed shape, the schema of `details`.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
  */
 export interface ErrorDefinition {
   /** One sentence, published by `schema <command>`. */

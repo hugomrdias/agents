@@ -6,7 +6,7 @@ import { site } from './commands/shared.ts'
  * Every error code launchpad commands return besides the built-in codes,
  * published by `launchpad schema <command>`.
  *
- * @see https://github.com/hugomrdias/foc-cli/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
+ * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
  */
 export const errors = {
   auth_required: {
