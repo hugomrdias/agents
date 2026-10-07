@@ -312,9 +312,9 @@ Provide a setup command that is opt-in and scriptable. Stripe (`stripe agent set
 
 | Command | Behavior |
 | --- | --- |
-| `acme skills install [--agent <name>…] [--scope project\|global] [--force]` | Copies the bundled skill to `.agents/skills/acme/` and to `.claude/skills/acme/`, or to the user-level equivalents. Defaults to project scope. |
+| `acme skills install [--target agents\|claude…] [--scope project\|global] [--force]` | Copies the bundled skill to `.agents/skills/acme/` and to `.claude/skills/acme/`, or to the user-level equivalents. Defaults to both targets and project scope. |
 | `acme skills status --json` | Reports each installed copy, its recorded CLI version, whether it is stale relative to the running CLI, and whether someone edited it. |
-| `acme skills uninstall` | Removes only the files that the CLI installed and that nobody has edited. |
+| `acme skills uninstall [--target agents\|claude…] [--scope project\|global]` | Removes only the files that the CLI installed and that nobody has edited. |
 
 Follow these rules for the setup command:
 
