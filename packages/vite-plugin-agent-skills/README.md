@@ -1,4 +1,4 @@
-# vite-plugin-agent-skills
+# @hugomrdias/vite-plugin-agent-skills
 
 A Vite plugin that publishes [Agent Skills](https://agentskills.io/specification) for [agent skills discovery](https://github.com/cloudflare/agent-skills-discovery-rfc). It reads a directory of skills, validates them, and writes the discovery index and each skill's file under `.well-known/agent-skills/` in the build output. Any static host can serve them, and agents install them with `npx skills add https://your.site`.
 
@@ -7,7 +7,7 @@ A Vite plugin that publishes [Agent Skills](https://agentskills.io/specification
 ```ts
 // vite.config.ts
 import { defineConfig } from 'vite'
-import { agentSkills } from 'vite-plugin-agent-skills'
+import { agentSkills } from '@hugomrdias/vite-plugin-agent-skills'
 
 export default defineConfig({
   plugins: [agentSkills({ dir: 'skills' })],
@@ -86,10 +86,10 @@ import { index, skills } from 'virtual:agent-skills'
 skills[0].path // '/.well-known/agent-skills/fil/SKILL.md'
 ```
 
-For its types, add `vite-plugin-agent-skills/client` to `types` in `tsconfig.json`, or reference it from a declaration file:
+For its types, add `@hugomrdias/vite-plugin-agent-skills/client` to `types` in `tsconfig.json`, or reference it from a declaration file:
 
 ```ts
-/// <reference types="vite-plugin-agent-skills/client" />
+/// <reference types="@hugomrdias/vite-plugin-agent-skills/client" />
 ```
 
 ## API

@@ -1,8 +1,18 @@
 {
-  "name": "vite-plugin-agent-skills",
-  "private": true,
+  "name": "@hugomrdias/vite-plugin-agent-skills",
   "version": "0.0.0",
   "description": "Vite plugin that publishes Agent Skills for agent skills discovery under /.well-known/agent-skills/",
+  "license": "MIT",
+  "author": "Hugo Dias <hugomrdias@gmail.com>",
+  "homepage": "https://github.com/hugomrdias/fil/tree/main/packages/vite-plugin-agent-skills#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hugomrdias/fil.git",
+    "directory": "packages/vite-plugin-agent-skills"
+  },
+  "bugs": {
+    "url": "https://github.com/hugomrdias/fil/issues"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -15,6 +25,7 @@
   },
   "files": [
     "dist",
+    "!dist/tsconfig.tsbuildinfo",
     "client.d.ts",
     "README.md"
   ],
@@ -36,5 +47,11 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "8.3.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

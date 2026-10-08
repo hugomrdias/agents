@@ -1,8 +1,18 @@
 {
   "name": "clipact",
-  "private": true,
   "version": "0.0.0",
   "description": "Small framework for Node.js CLIs that agents and humans can both rely on",
+  "license": "MIT",
+  "author": "Hugo Dias <hugomrdias@gmail.com>",
+  "homepage": "https://github.com/hugomrdias/fil/tree/main/packages/clipact#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hugomrdias/fil.git",
+    "directory": "packages/clipact"
+  },
+  "bugs": {
+    "url": "https://github.com/hugomrdias/fil/issues"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -16,6 +26,7 @@
   },
   "files": [
     "dist",
+    "!dist/tsconfig.tsbuildinfo",
     "README.md"
   ],
   "scripts": {
@@ -33,5 +44,11 @@
   },
   "dependencies": {
     "@standard-schema/spec": "1.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
