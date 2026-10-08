@@ -1,0 +1,40 @@
+{
+  "name": "vite-plugin-agent-skills",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Vite plugin that publishes Agent Skills for agent skills discovery under /.well-known/agent-skills/",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./client.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "client.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test 'test/**/*.test.ts'",
+    "lint": "biome check .",
+    "check": "pnpm typecheck && pnpm test && pnpm lint"
+  },
+  "peerDependencies": {
+    "vite": ">=6"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "8.3.2"
+  }
+}
