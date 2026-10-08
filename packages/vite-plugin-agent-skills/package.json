@@ -1,6 +1,6 @@
 {
   "name": "@hugomrdias/vite-plugin-agent-skills",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Vite plugin that publishes Agent Skills for agent skills discovery under /.well-known/agent-skills/",
   "license": "MIT",
   "author": "Hugo Dias <hugomrdias@gmail.com>",
