@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/hugomrdias/fil/compare/clipact-v0.2.0...clipact-v0.3.0) (2026-10-12)
+
+
+### Features
+
+* early retrieval links during put, with a provider hint in fil-api ([#65](https://github.com/hugomrdias/fil/issues/65)) ([023073b](https://github.com/hugomrdias/fil/commit/023073b23dd9b8f5b4ba94f55768f89e91b28520))
+
 ## [0.2.0](https://github.com/hugomrdias/fil/compare/clipact-v0.1.0...clipact-v0.2.0) (2026-10-12)
 
 
