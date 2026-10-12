@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/hugomrdias/fil/compare/clipact-v0.1.0...clipact-v0.2.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **clipact:** the root or a group run without a subcommand exits 1 in every mode; human mode prints its help to stderr. Use --help for help.
+
+### Features
+
+* **clipact:** list commands and enum values as structured data in invalid_input ([#63](https://github.com/hugomrdias/fil/issues/63)) ([238cf57](https://github.com/hugomrdias/fil/commit/238cf577e7581f4b4c1fc40ee50ec3c767e4c15d)), closes [#25](https://github.com/hugomrdias/fil/issues/25)
+
 ## 0.1.0 (2026-10-08)
 
 
