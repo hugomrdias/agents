@@ -272,6 +272,22 @@ export function isBuiltin(node: CommandNode): boolean {
   return BUILTIN_NODES.has(node)
 }
 
+/** A leaf command with its full path. */
+export interface Leaf {
+  path: string
+  command: AnyCommand
+}
+
+/** Lists every command below `node` with its path, depth first, skipping built-ins. */
+export function leaves(node: CommandNode, prefix: string[] = []): Leaf[] {
+  if (node.kind === 'command') {
+    return [{ path: prefix.join(' '), command: node }]
+  }
+  return node.commands
+    .filter((child) => !isBuiltin(child))
+    .flatMap((child) => leaves(child, [...prefix, child.name]))
+}
+
 /** Returns `true` for a built-in whose successful result is plain text. */
 export function printsPlainText(node: CommandNode): boolean {
   return BUILTIN_NODES.get(node)?.plainText === true

@@ -1,9 +1,9 @@
 import {
   type AnyCommand,
   type CliOptions,
-  type CommandNode,
   type Group,
   isBuiltin,
+  leaves,
 } from './define.ts'
 import { FRAMEWORK_FLAGS, type FrameworkFlag, flagTokens } from './route.ts'
 import {
@@ -16,22 +16,6 @@ import {
 /** The output contract, repeated in agent help. */
 const CONTRACT =
   'Output is one JSON object on stdout: "data" on success (exit code 0) or "error" on failure (exit code 1), then optional "next" steps.'
-
-/** A leaf command with its full path. */
-export interface Leaf {
-  path: string
-  command: AnyCommand
-}
-
-/** Lists every command below `node` with its path, depth first, skipping built-ins. */
-export function leaves(node: CommandNode, prefix: string[] = []): Leaf[] {
-  if (node.kind === 'command') {
-    return [{ path: prefix.join(' '), command: node }]
-  }
-  return node.commands
-    .filter((child) => !isBuiltin(child))
-    .flatMap((child) => leaves(child, [...prefix, child.name]))
-}
 
 /** Formats rows as two aligned columns. */
 function columns(rows: [string, string][], indent = '  '): string {

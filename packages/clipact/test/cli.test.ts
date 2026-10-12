@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { describe, test } from 'node:test'
 import * as z from 'zod'
+import { leaves } from '../src/define.ts'
 import { RESULT_SCHEMA } from '../src/discovery.ts'
 import {
   BUILTIN_ERROR_CODES,
@@ -143,7 +144,65 @@ describe('input validation', () => {
         path: 'network',
         source: 'env:ACME_NETWORK',
         message: 'Invalid option: expected one of "mainnet"|"calibration"',
+        expected: ['mainnet', 'calibration'],
       },
+    ])
+  })
+
+  test('lists the allowed values of enum fields and array items', async () => {
+    const command: Command = defineCommand({
+      name: 'paint',
+      description: 'Paint something',
+      input: z.strictObject({
+        color: z
+          .enum(['red', 'blue'])
+          .refine((color) => color !== 'blue', 'Blue is sold out'),
+        accents: z.array(z.enum(['gold', 'silver'])).optional(),
+      }),
+      handler: async () => ({
+        default: defineHandler(command, ({ ok }) => ok({})),
+      }),
+    })
+    const paint = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      commands: [command],
+    })
+    const invalid = assertContract(
+      await invoke(paint, [
+        'paint',
+        '--color',
+        'green',
+        '--accents',
+        'gold',
+        '--accents',
+        'bronze',
+      ])
+    )
+    assert.deepEqual(
+      (invalid.error as { details: { path: string; expected?: unknown }[] })
+        .details,
+      [
+        {
+          path: 'color',
+          source: 'flag',
+          message: 'Invalid option: expected one of "red"|"blue"',
+          expected: ['red', 'blue'],
+        },
+        {
+          path: 'accents.1',
+          source: 'flag',
+          message: 'Invalid option: expected one of "gold"|"silver"',
+          expected: ['gold', 'silver'],
+        },
+      ]
+    )
+    // A member of the enum that fails another rule has nothing to list.
+    const refused = assertContract(
+      await invoke(paint, ['paint', '--color', 'blue'])
+    )
+    assert.deepEqual((refused.error as { details: unknown }).details, [
+      { path: 'color', source: 'flag', message: 'Blue is sold out' },
     ])
   })
 
@@ -409,13 +468,21 @@ describe('errors', () => {
     }
   })
 
-  test('suggests the closest command', async () => {
+  test('suggests the closest command and lists the commands', async () => {
     const result = await invoke(cli, ['artifact', 'put'])
     const json = assertContract(result)
+    const error = json.error as { message: string; details: unknown }
     assert.equal(
-      (json.error as { message: string }).message,
+      error.message,
       'Unknown command "acme artifact". Did you mean "artifacts"?'
     )
+    assert.deepEqual(error.details, [
+      {
+        path: 'command',
+        message: 'Unknown command "artifact"',
+        expected: leaves(cli.root).map((leaf) => leaf.path),
+      },
+    ])
     assert.deepEqual(json.next, [
       {
         by: 'agent',
@@ -425,26 +492,97 @@ describe('errors', () => {
       {
         by: 'agent',
         command: 'acme schema --list',
-        description: 'List all commands',
+        description: 'List all commands with descriptions',
       },
     ])
   })
 
-  test('a group without a command is an error for machines and help for humans', async () => {
-    const machine = await invoke(cli, ['artifacts'])
+  test('points an unknown command in a group to the group schema', async () => {
+    const json = assertContract(await invoke(cli, ['artifacts', 'nope']))
     assert.deepEqual(
-      (assertContract(machine).error as { details: unknown }).details,
-      [
+      (json.error as { details: { expected: unknown }[] }).details[0]?.expected,
+      ['artifacts put', 'artifacts get', 'artifacts ls', 'artifacts label']
+    )
+    assert.deepEqual(json.next, [
+      {
+        by: 'agent',
+        command: 'acme schema artifacts',
+        description: 'List the "artifacts" commands with descriptions',
+      },
+    ])
+  })
+
+  test('a group without a command is a usage error in every mode', async () => {
+    const machine = await invoke(cli, ['artifacts'])
+    assert.equal(machine.exitCode, 1)
+    const json = assertContract(machine)
+    assert.deepEqual(json, {
+      error: {
+        code: 'invalid_input',
+        message: 'Missing command after "acme artifacts".',
+        retryable: false,
+        details: [
+          {
+            path: 'command',
+            message: 'Missing command',
+            expected: [
+              'artifacts put',
+              'artifacts get',
+              'artifacts ls',
+              'artifacts label',
+            ],
+          },
+        ],
+      },
+      next: [
+        {
+          by: 'agent',
+          command: 'acme schema artifacts',
+          description: 'List the "artifacts" commands with descriptions',
+        },
+      ],
+    })
+
+    const human = await invoke(cli, ['artifacts', '--format', 'human'])
+    assert.equal(human.exitCode, 1)
+    assert.equal(human.stdout, '')
+    assert.match(human.stderr, /Commands:\n {2}artifacts put/)
+    assert.match(
+      human.stderr,
+      /Error: Missing command after "acme artifacts"\. \(invalid_input\)/
+    )
+
+    const help = await invoke(cli, ['artifacts', '--help', '--format', 'human'])
+    assert.equal(help.exitCode, 0)
+    assert.match(help.stdout, /Commands:\n {2}artifacts put/)
+  })
+
+  test('the root without a command is a usage error in every mode', async () => {
+    const json = assertContract(await invoke(cli, []))
+    assert.deepEqual(json.error, {
+      code: 'invalid_input',
+      message: 'Missing command after "acme".',
+      retryable: false,
+      details: [
         {
           path: 'command',
-          message:
-            'Expected one of: artifacts put, artifacts get, artifacts ls, artifacts label',
+          message: 'Missing command',
+          expected: leaves(cli.root).map((leaf) => leaf.path),
         },
-      ]
-    )
-    const human = await invoke(cli, ['artifacts', '--format', 'human'])
-    assert.equal(human.exitCode, 0)
-    assert.match(human.stdout, /Commands:\n {2}artifacts put/)
+      ],
+    })
+    assert.deepEqual(json.next, [
+      {
+        by: 'agent',
+        command: 'acme schema --list',
+        description: 'List all commands with descriptions',
+      },
+    ])
+
+    const human = await invoke(cli, ['--format', 'human'])
+    assert.equal(human.exitCode, 1)
+    assert.equal(human.stdout, '')
+    assert.match(human.stderr, /Usage:\n {2}acme <command> \[flags\]/)
   })
 })
 

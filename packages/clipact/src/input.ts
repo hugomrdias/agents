@@ -79,7 +79,13 @@ export async function resolveInput(
           ? missingMessage(fieldSpec)
           : issue.message
       const source = sources[field]
-      issues.push(source ? { path, source, message } : { path, message })
+      const expected = rejectedEnum(fieldSpec, values[field], path)
+      issues.push({
+        path,
+        ...(source ? { source } : {}),
+        message,
+        ...(expected ? { expected } : {}),
+      })
     }
   }
   if (issues.length > 0 || !('value' in result)) {
@@ -465,6 +471,30 @@ function readStream(
     stream.once('error', onError)
     signal.addEventListener('abort', onAbort, { once: true })
   })
+}
+
+/**
+ * Returns the members of a field's enum when the value at `path`, the field
+ * itself or one of its array items, is not one of them.
+ */
+function rejectedEnum(
+  field: FieldSpec | undefined,
+  value: unknown,
+  path: string
+): unknown[] | undefined {
+  if (!field?.enum) {
+    return undefined
+  }
+  const rest = path.slice(field.name.length + 1)
+  let rejected: unknown
+  if (field.kind !== 'array') {
+    rejected = rest === '' ? value : undefined
+  } else if (rest !== '' && Array.isArray(value)) {
+    rejected = value[Number(rest)]
+  }
+  return rejected === undefined || field.enum.includes(rejected)
+    ? undefined
+    : field.enum
 }
 
 /** Explains how to supply a missing required field. */

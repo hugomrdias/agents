@@ -1,4 +1,10 @@
-import type { AnyCommand, CliOptions, CommandNode, Group } from './define.ts'
+import {
+  type AnyCommand,
+  type CliOptions,
+  type CommandNode,
+  type Group,
+  leaves,
+} from './define.ts'
 import { CliError, DefinitionError, type Next } from './errors.ts'
 
 /** A flag owned by the framework rather than a command's input. */
@@ -258,7 +264,10 @@ export function route(
   return { kind: 'node', node, path, rest: without(args, consumed) }
 }
 
-/** Builds the error for an unknown command word. */
+/**
+ * Builds the error for a word that names no command in its group. The
+ * `command` issue lists the group's commands in `expected`.
+ */
 export function unknownCommand(
   cli: CliOptions,
   routed: Extract<Route, { kind: 'unknown' }>
@@ -274,17 +283,66 @@ export function unknownCommand(
       description: `Show help for "${routed.suggestion}"`,
     })
   }
-  next.push({
-    by: 'agent',
-    command: `${cli.name} schema --list`,
-    description: 'List all commands',
-  })
+  next.push(listStep(cli, routed.path))
   return new CliError({
     code: 'invalid_input',
     message: `Unknown command "${attempted}".${routed.suggestion ? ` Did you mean "${routed.suggestion}"?` : ''}`,
     retryable: false,
+    details: [
+      {
+        path: 'command',
+        message: `Unknown command "${routed.word}"`,
+        expected: commandPaths(routed.group, routed.path),
+      },
+    ],
     next,
   })
+}
+
+/**
+ * Builds the error for the root or a group run without a command, in every
+ * mode. The `command` issue lists the group's commands in `expected`.
+ */
+export function missingCommand(
+  cli: CliOptions,
+  group: Group,
+  path: string[]
+): CliError {
+  return new CliError({
+    code: 'invalid_input',
+    message: `Missing command after "${[cli.name, ...path].join(' ')}".`,
+    retryable: false,
+    details: [
+      {
+        path: 'command',
+        message: 'Missing command',
+        expected: commandPaths(group, path),
+      },
+    ],
+    next: [listStep(cli, path)],
+  })
+}
+
+/** Lists the paths of the commands below a group, as `schema --list` names them. */
+function commandPaths(group: Group, path: string[]): string[] {
+  return leaves(group, path).map((leaf) => leaf.path)
+}
+
+/** Returns the `next` step that lists the commands of the CLI or of one group. */
+function listStep(cli: CliOptions, path: string[]): Next {
+  if (path.length === 0) {
+    return {
+      by: 'agent',
+      command: `${cli.name} schema --list`,
+      description: 'List all commands with descriptions',
+    }
+  }
+  const group = path.join(' ')
+  return {
+    by: 'agent',
+    command: `${cli.name} schema ${group}`,
+    description: `List the "${group}" commands with descriptions`,
+  }
 }
 
 /** Returns `args` without the given indexes. */

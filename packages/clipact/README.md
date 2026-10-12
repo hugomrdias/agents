@@ -188,7 +188,7 @@ Detection changes presentation only:
 | Color and status lines | On a TTY, respecting `NO_COLOR` and `FORCE_COLOR` | Off |
 | Prompts | When stdin and stdout are TTYs and neither an agent nor `CI` is detected | Never |
 | Help | Narrative, with global flags | Examples first, then output fields, error codes, side effects, and a pointer to `schema` |
-| Usage errors | Usage line on stderr | Full command help on stderr, then the JSON result. An unknown or missing subcommand gets the group's help. |
+| Usage errors | Usage line on stderr. A missing subcommand gets the group's help. | Full command help on stderr, then the JSON result. An unknown or missing subcommand gets the group's help. |
 | Progress | Rewritten status line | A plain line at most every 15 s |
 
 Detection never changes permissions, confirmations, exit codes, the JSON shape, or which operation runs.
@@ -235,6 +235,12 @@ acme: --entri: Unknown flag; did you mean --entry? (and 3 more).
 
 ```json
 {"error":{"code":"invalid_input","message":"--entri: Unknown flag; did you mean --entry? (and 3 more).","retryable":false,"details":[{"path":"--entri","source":"flag","message":"Unknown flag; did you mean --entry?"},{"path":"path","message":"Required; pass <path> or --path"},{"path":"copies","source":"flag","message":"Too big: expected number to be <=5"},{"path":"privateKey","message":"Required; set ACME_PRIVATE_KEY"}]}}
+```
+
+When a value is not a member of a field's `enum`, or of the `enum` of an array field's items, the issue lists the allowed values in `expected`. clipact reads them from the field's JSON Schema, so this works with any schema library:
+
+```json
+{"path":"network","source":"flag","message":"Invalid option: expected one of \"mainnet\"|\"calibration\"","expected":["mainnet","calibration"]}
 ```
 
 `--debug` prints the source of each value on stderr before the handler runs:
@@ -299,7 +305,7 @@ Throw a `CliError` for an expected failure. In strict mode, clipact checks that 
 
 | Code | Raised by | `retryable` |
 | --- | --- | --- |
-| `invalid_input` | Parsing, validation, unknown commands, and invalid framework flags or variables | `false` |
+| `invalid_input` | Parsing, validation, unknown or missing commands, and invalid framework flags or variables | `false` |
 | `confirmation_required` | The confirmation | `false` |
 | `interrupted` | SIGINT, SIGTERM, SIGHUP | `true` only for `readOnly` or `idempotent` commands |
 | `internal_error` | Anything unexpected | `false` |
@@ -351,10 +357,18 @@ clipact registers its signal listeners with `process.once`, so a second signal e
 | `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors, aliases }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
-None of these commands loads handlers, reads credentials, or uses the network. In human mode, `schema` pretty-prints its `data`. A group run without a subcommand prints its help in human mode. In machine mode, it returns `invalid_input` with a list of its commands. An unknown command suggests the closest name:
+None of these commands loads handlers, reads credentials, or uses the network. In human mode, `schema` pretty-prints its `data`.
+
+The root or a group run without a subcommand, such as `acme` or `acme artifacts`, is a usage error in every mode, so agent detection never changes its exit code. Human mode prints the group's help and the error on stderr. Machine mode returns `invalid_input` whose `command` issue lists the group's commands in `expected`, with a `next` step for the group's `schema`. `--help` prints the same help on stdout and exits `0`.
 
 ```json
-{"error":{"code":"invalid_input","message":"Unknown command \"acme artifact\". Did you mean \"artifacts\"?","retryable":false},"next":[{"by":"agent","command":"acme artifacts --help","description":"Show help for \"artifacts\""},{"by":"agent","command":"acme schema --list","description":"List all commands"}]}
+{"error":{"code":"invalid_input","message":"Missing command after \"acme artifacts\".","retryable":false,"details":[{"path":"command","message":"Missing command","expected":["artifacts put","artifacts get","artifacts ls","artifacts label"]}]},"next":[{"by":"agent","command":"acme schema artifacts","description":"List the \"artifacts\" commands with descriptions"}]}
+```
+
+An unknown command gets the same `expected` list, and suggests the closest name:
+
+```json
+{"error":{"code":"invalid_input","message":"Unknown command \"acme artifact\". Did you mean \"artifacts\"?","retryable":false,"details":[{"path":"command","message":"Unknown command \"artifact\"","expected":["artifacts put","artifacts get","artifacts ls","artifacts label"]}]},"next":[{"by":"agent","command":"acme artifacts --help","description":"Show help for \"artifacts\""},{"by":"agent","command":"acme schema --list","description":"List all commands with descriptions"}]}
 ```
 
 Agent help for a command looks like this:
@@ -578,7 +592,7 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 | `MapError` | `(error: unknown) => CliError \| undefined \| Promise<…>`. |
 | `Next` | `{ by: 'agent' \| 'user', description, command? }`. |
 | `ErrorBody` | `{ code, message, retryable, retryAfterSeconds?, details? }`. |
-| `InputIssue` | `{ path, message, source? }`, the items of `invalid_input` details. |
+| `InputIssue` | `{ path, message, source?, expected? }`, the items of `invalid_input` details. `expected` lists the accepted values: a group's commands or an enum's members. |
 | `InputOf<S>`, `ParsedOf<S>`, `DataOf<S>` | Input before parsing, input after parsing, and handler data for a schema. |
 | `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
 

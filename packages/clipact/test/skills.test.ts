@@ -220,6 +220,7 @@ describe('skills install', () => {
         path: 'scope',
         source: 'flag',
         message: 'Expected one of: project, global',
+        expected: ['project', 'global'],
       },
     ])
   })

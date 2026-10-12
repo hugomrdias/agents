@@ -122,7 +122,7 @@ These conventions apply to `data` and to `error.details`:
 | `error.message` | One actionable sentence. No stack traces unless `--debug` is set. |
 | `error.retryable` | `true` only if running **the same command again** is safe and might succeed without anyone changing anything. |
 | `error.retryAfterSeconds` | Optional delay before a retry, from the `Retry-After` header or local policy. |
-| `error.details` | Optional structured context. The registry fixes its shape for each code, such as `[{ "path": "--limit", "message": "must be ≤ 100" }]` for `invalid_input`. |
+| `error.details` | Optional structured context. The registry fixes its shape for each code, such as `[{ "path": "--limit", "message": "must be ≤ 100" }]` for `invalid_input`. When a field accepts a fixed set of values, such as an enum flag or the subcommands of a group, list them in the issue, as in `{ "path": "network", "message": "…", "expected": ["mainnet", "calibration"] }`, so the agent does not parse them from prose. |
 | `next[].by` | `agent` if the agent can do the step. `user` if a human must act: sign in, approve spending, confirm a deletion, or fix configuration. |
 | `next[].command` | Optional exact command line. It must run as written, with real IDs filled in. |
 | `next[].description` | What the step does and why. |

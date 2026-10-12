@@ -29,6 +29,8 @@ export interface InputIssue {
   path: string
   message: string
   source?: string
+  /** The values the field accepts, such as the commands of a group or an enum's members. */
+  expected?: unknown[]
 }
 
 /**
@@ -56,6 +58,10 @@ const inputIssues = fromJsonSchema<InputIssue[]>({
       path: { type: 'string' },
       message: { type: 'string' },
       source: { type: 'string' },
+      expected: {
+        type: 'array',
+        description: 'The values the field accepts',
+      },
     },
     required: ['path', 'message'],
     additionalProperties: false,

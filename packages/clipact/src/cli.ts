@@ -23,12 +23,13 @@ import {
   isCliError,
   TRANSIENT_ERROR_CODES,
 } from './errors.ts'
-import { commandHelp, groupHelp, leaves, usage } from './help.ts'
+import { commandHelp, groupHelp, usage } from './help.ts'
 import { type FrameworkValues, invalidInput, resolveInput } from './input.ts'
 import { type Io, processIo } from './io.ts'
 import { resolveMode } from './mode.ts'
 import {
   type GlobalFlags,
+  missingCommand,
   route,
   scanGlobalFlags,
   unknownCommand,
@@ -233,8 +234,8 @@ class Invocation {
   readonly #state: InvocationState
   #spec: CommandSpec | undefined
   #checkpoint: Checkpoint | undefined
-  /** Agent help for the group a routing error happened in. */
-  #groupHelp: string | undefined
+  /** The group a routing error happened in, and whether its command was missing. */
+  #routing: { group: Group; path: string[]; missing: boolean } | undefined
 
   /** Creates an invocation. */
   constructor(state: InvocationState) {
@@ -253,17 +254,19 @@ class Invocation {
         return await this.#text(`${cli.version}\n`)
       }
       if (routed.kind === 'unknown') {
-        this.#groupHelp = groupHelp(cli, routed.group, routed.path, true)
+        const { group, path } = routed
+        this.#routing = { group, path, missing: false }
         throw unknownCommand(cli, routed)
       }
       const { node, path } = routed
       if (node.kind === 'group') {
-        if (flags.help || mode.format === 'human') {
+        if (flags.help) {
           return await this.#text(
             groupHelp(cli, node, path, Boolean(mode.agent))
           )
         }
-        this.#groupHelp = groupHelp(cli, node, path, true)
+        // A usage error in every mode, so agent detection never changes the exit code.
+        this.#routing = { group: node, path, missing: true }
         throw missingCommand(cli, node, path)
       }
       const spec = resolveSpec(node, path.join(' '))
@@ -287,7 +290,7 @@ class Invocation {
 
   /** Converts any thrown value into an error result and renders it. */
   async fail(error: unknown): Promise<Outcome> {
-    const { session, signal, cli } = this.#state
+    const { session, signal, cli, mode } = this.#state
     const command = this.#spec?.command
     if (
       signal.aborted &&
@@ -327,8 +330,19 @@ class Invocation {
     const extras: RenderExtras = {}
     if (cliError.code === 'invalid_input') {
       const spec = this.#spec
+      const routing = this.#routing
       extras.usage = spec && usage(cli, spec)
-      extras.help = spec ? commandHelp(cli, spec, true) : this.#groupHelp
+      extras.help = spec
+        ? commandHelp(cli, spec, true)
+        : routing && groupHelp(cli, routing.group, routing.path, true)
+      if (routing?.missing) {
+        extras.groupHelp = groupHelp(
+          cli,
+          routing.group,
+          routing.path,
+          Boolean(mode.agent)
+        )
+      }
     }
     return await this.#finish(await this.#checked(result), extras)
   }
@@ -583,33 +597,6 @@ function contractViolation(message: string): ResultObject {
     }),
     undefined
   )
-}
-
-/** Builds the error for a group invoked without a subcommand in machine mode. */
-function missingCommand(
-  cli: CliOptions,
-  group: Group,
-  path: string[]
-): CliError {
-  const commands = leaves(group, path).map((leaf) => leaf.path)
-  return new CliError({
-    code: 'invalid_input',
-    message: `Missing command after "${[cli.name, ...path].join(' ')}".`,
-    retryable: false,
-    details: [
-      {
-        path: 'command',
-        message: `Expected one of: ${commands.join(', ')}`,
-      },
-    ],
-    next: [
-      {
-        by: 'agent',
-        command: `${cli.name} schema --list`,
-        description: 'List all commands with descriptions',
-      },
-    ],
-  })
 }
 
 /** Lists each input value and its source for `--debug`, redacting secrets. */

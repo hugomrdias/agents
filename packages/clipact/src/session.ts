@@ -41,6 +41,8 @@ export interface RenderExtras {
   usage?: string
   /** Full help printed to stderr on a usage error in agent mode. */
   help?: string
+  /** Help for a group run without a command, printed to stderr before the error in human mode. */
+  groupHelp?: string
 }
 
 /**
@@ -131,6 +133,9 @@ export class Session {
     }
 
     if (error) {
+      if (extras.groupHelp) {
+        this.log(extras.groupHelp)
+      }
       const style = this.#style
       const lines = [
         `${style(['bold', 'red'], 'Error:')} ${error.message} ${style('dim', `(${error.code})`)}`,

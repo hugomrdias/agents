@@ -6,10 +6,10 @@ import {
   defineCommand,
   defineHandler,
   type Group,
+  leaves,
   markBuiltin,
 } from './define.ts'
 import type { ErrorRegistry } from './errors.ts'
-import { leaves } from './help.ts'
 import { fromJsonSchema } from './json-schema.ts'
 import { closest, route, unknownCommand } from './route.ts'
 import {
