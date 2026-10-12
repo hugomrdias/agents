@@ -2,7 +2,10 @@ import type { CliOptions, Mode, ProgressEvent } from './define.ts'
 import type { ErrorBody, InputIssue, Next } from './errors.ts'
 import { type Io, styler, writeAsync } from './io.ts'
 
-/** Minimum interval between progress lines when no human is watching. */
+/**
+ * Minimum interval between progress lines of the same phase when no human is
+ * watching. A new phase always prints.
+ */
 export const PROGRESS_INTERVAL_MS = 15_000
 
 /** Returns the cursor to the line start and erases the line. */
@@ -57,6 +60,7 @@ export class Session {
   #rendered = false
   #statusLine = false
   #lastProgress = 0
+  #lastPhase: string | undefined
   /** The latest stderr write; writes to one stream complete in order. */
   #pending: Promise<void> = Promise.resolve()
   readonly #style: ReturnType<typeof styler>
@@ -78,7 +82,10 @@ export class Session {
 
   /**
    * Shows progress: a rewritten status line on a human terminal, otherwise a
-   * plain line at most every {@link PROGRESS_INTERVAL_MS}.
+   * plain line for each new phase and at most every
+   * {@link PROGRESS_INTERVAL_MS} within one phase.
+   *
+   * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#output-size-and-long-running-commands
    */
   progress(event: ProgressEvent): void {
     const text = `${event.phase}: ${event.message}`
@@ -92,7 +99,11 @@ export class Session {
       return
     }
     const now = Date.now()
-    if (now - this.#lastProgress >= PROGRESS_INTERVAL_MS) {
+    if (
+      event.phase !== this.#lastPhase ||
+      now - this.#lastProgress >= PROGRESS_INTERVAL_MS
+    ) {
+      this.#lastPhase = event.phase
       this.#lastProgress = now
       this.log(`${this.cli.name}: ${text}`)
     }

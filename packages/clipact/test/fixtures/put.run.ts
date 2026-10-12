@@ -19,6 +19,8 @@ export default defineHandler(put, (ctx) => {
     return ctx.ok({ ref: 'dry-run', url: 'https://example.com/dry-run' })
   }
   ctx.progress({ phase: 'upload', message: `Uploading ${path}` })
+  ctx.progress({ phase: 'upload', message: `Uploaded ${path}` })
+  ctx.progress({ phase: 'commit', message: `Committing ${path}` })
   return ctx.ok(
     { ref: `ref-${copies}`, url: `https://example.com/${path}`, tags },
     {

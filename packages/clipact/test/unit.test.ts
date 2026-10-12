@@ -154,13 +154,16 @@ describe('toFlag', () => {
 })
 
 describe('progress', () => {
-  test('agents get the first progress line and no status-line escapes', async () => {
+  test('agents get a line per new phase and no status-line escapes', async () => {
     const result = await invoke(
       (await import('./fixtures/cli.ts')).cli,
       ['artifacts', 'put', 'a'],
       { env: { ACME_PRIVATE_KEY: 'k', AI_AGENT: 'codex' }, tty: true }
     )
-    assert.equal(result.stderr, 'acme: upload: Uploading a\n')
+    assert.equal(
+      result.stderr,
+      'acme: upload: Uploading a\nacme: commit: Committing a\n'
+    )
   })
 })
 

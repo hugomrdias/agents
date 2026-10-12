@@ -189,7 +189,7 @@ Detection changes presentation only:
 | Prompts | When stdin and stdout are TTYs and neither an agent nor `CI` is detected | Never |
 | Help | Narrative, with global flags | Examples first, then output fields, error codes, side effects, and a pointer to `schema` |
 | Usage errors | Usage line on stderr. A missing subcommand gets the group's help. | Full command help on stderr, then the JSON result. An unknown or missing subcommand gets the group's help. |
-| Progress | Rewritten status line | A plain line at most every 15 s |
+| Progress | Rewritten status line | A plain line for each new phase, and at most every 15 s within one phase |
 
 Detection never changes permissions, confirmations, exit codes, the JSON shape, or which operation runs.
 
@@ -336,7 +336,7 @@ A mistake in a definition or a handler module also becomes `internal_error`. Exa
 
 ### Long-running work and signals
 
-- `ctx.progress({ phase, message, data? })` reports progress on stderr. On a human terminal, it rewrites one status line. Otherwise, it prints `acme: <phase>: <message>` at most every 15 seconds. These lines also reset the inactivity timers of agent harnesses.
+- `ctx.progress({ phase, message, data? })` reports progress on stderr. On a human terminal, it rewrites one status line. Otherwise, it prints `acme: <phase>: <message>` for each new phase, and at most every 15 seconds while the phase stays the same. These lines also reset the inactivity timers of agent harnesses. clipact does not print `data` yet. Put anything the reader needs in `message`.
 - To register a job, call `ctx.checkpoint({ id, next })` before side effects start. clipact prints the ID to stderr at once, so the ID survives even a SIGKILL: `acme: started op_1; if interrupted, run: acme operations resume op_1`.
 - clipact aborts `ctx.signal` on the first SIGINT, SIGTERM, or SIGHUP. Pass it to `fetch`, timers, child processes, and SDK calls. When the handler rejects after the abort, the CLI writes an `interrupted` result with the latest checkpoint's `next` steps. It then re-raises the signal, so the shell sees `130`, `143`, or `129`:
 
