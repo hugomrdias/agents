@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/hugomrdias/fil/compare/clipact-v0.3.0...clipact-v0.4.0) (2026-10-12)
+
+
+### Features
+
+* progress heartbeat in clipact, and transaction hashes while fil waits ([#71](https://github.com/hugomrdias/fil/issues/71)) ([f9d538a](https://github.com/hugomrdias/fil/commit/f9d538a910c62e53e451dce0cd7de2a9a2e48037))
+
 ## [0.3.0](https://github.com/hugomrdias/fil/compare/clipact-v0.2.0...clipact-v0.3.0) (2026-10-12)
 
 
