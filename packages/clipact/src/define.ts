@@ -146,7 +146,10 @@ export interface Context<
   mode: Mode
   /** `--dry-run` was given; perform no side effects. */
   dryRun: boolean
-  /** Reports progress on stderr: a status line for humans, periodic lines for agents. */
+  /**
+   * Reports a change on stderr: a status line for humans, a line per event for
+   * agents. clipact repeats the latest event while the command stays quiet.
+   */
   progress(event: ProgressEvent): void
   /** Writes a human-readable line to stderr. */
   log(message: string): void

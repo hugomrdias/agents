@@ -189,7 +189,7 @@ Detection changes presentation only:
 | Prompts | When stdin and stdout are TTYs and neither an agent nor `CI` is detected | Never |
 | Help | Narrative, with global flags | Examples first, then output fields, error codes, side effects, and a pointer to `schema` |
 | Usage errors | Usage line on stderr. A missing subcommand gets the group's help. | Full command help on stderr, then the JSON result. An unknown or missing subcommand gets the group's help. |
-| Progress | Rewritten status line | A plain line for each new phase, and at most every 15 s within one phase |
+| Progress | Rewritten status line, with the elapsed time once it stays quiet | A plain line for every event, repeated with its elapsed time after 15 s of quiet and then every 30 s |
 
 Detection never changes permissions, confirmations, exit codes, the JSON shape, or which operation runs.
 
@@ -336,7 +336,9 @@ A mistake in a definition or a handler module also becomes `internal_error`. Exa
 
 ### Long-running work and signals
 
-- `ctx.progress({ phase, message, data? })` reports progress on stderr. On a human terminal, it rewrites one status line. Otherwise, it prints `acme: <phase>: <message>` for each new phase, and at most every 15 seconds while the phase stays the same. These lines also reset the inactivity timers of agent harnesses. clipact does not print `data` yet. Put anything the reader needs in `message`.
+- `ctx.progress({ phase, message, data? })` reports progress on stderr. On a human terminal, it rewrites one status line. Otherwise, it prints `acme: <phase>: <message>` for every event. Report each change once, not every chunk or poll.
+- clipact keeps the output alive. When stderr has been quiet for 15 seconds, it repeats the latest event with its elapsed time, such as `acme: commit: Waiting for confirmation (45 s)`, and then repeats it every 30 seconds until another line or the result. These lines reset the inactivity timers of agent harnesses, so a handler never re-emits an event to look alive. A human terminal shows the elapsed time in the status line.
+- clipact does not print `data` yet. Put anything the reader needs in `message`.
 - To register a job, call `ctx.checkpoint({ id, next })` before side effects start. clipact prints the ID to stderr at once, so the ID survives even a SIGKILL: `acme: started op_1; if interrupted, run: acme operations resume op_1`.
 - clipact aborts `ctx.signal` on the first SIGINT, SIGTERM, or SIGHUP. Pass it to `fetch`, timers, child processes, and SDK calls. When the handler rejects after the abort, the CLI writes an `interrupted` result with the latest checkpoint's `next` steps. It then re-raises the signal, so the shell sees `130`, `143`, or `129`:
 
