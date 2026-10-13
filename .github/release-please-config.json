@@ -20,7 +20,6 @@
     { "type": "build", "section": "Build System", "hidden": true },
     { "type": "ci", "section": "Continuous Integration", "hidden": true }
   ],
-  "plugins": [{ "type": "node-workspace", "merge": false }],
   "packages": {
     "packages/clipact": { "component": "clipact" },
     "packages/vite-plugin-agent-skills": {
