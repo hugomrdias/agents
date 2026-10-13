@@ -2,8 +2,6 @@
 
 Tools for building software that coding agents use. This repository holds `clipact`, a framework for Node.js CLIs that agents run, a Vite plugin that publishes Agent Skills, and the guidelines behind them. It is a pnpm and Turborepo monorepo. The packages publish to npm, and the examples stay private.
 
-The packages moved here from [hugomrdias/fil](https://github.com/hugomrdias/fil), where the `fil` CLI and fil-app still use them. The history before the move keeps that repository's pull request numbers, written as `hugomrdias/fil#<number>`.
-
 ## Packages and examples
 
 | Directory | npm | Contents |
