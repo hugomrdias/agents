@@ -30,7 +30,7 @@ pnpm check
 
 ## Release
 
-[release-please](https://github.com/googleapis/release-please) versions the packages from [Conventional Commits](https://www.conventionalcommits.org/). [`.github/release-please-config.json`](.github/release-please-config.json) lists them, and [`.github/.release-please-manifest.json`](.github/.release-please-manifest.json) holds their current versions. The examples are not released.
+[release-please](https://github.com/googleapis/release-please) versions the packages from [Conventional Commits](https://www.conventionalcommits.org/). [`.github/release-please-config.json`](.github/release-please-config.json) lists them, and [`.github/release-please-manifest.json`](.github/release-please-manifest.json) holds their current versions. The examples are not released.
 
 1. On each push to `main`, the [Release workflow](.github/workflows/release.yml) opens or updates one release pull request per package, because `separate-pull-requests` is on. Each pull request bumps the version and updates `CHANGELOG.md` of a package that a commit touched since its last release. Below 1.0.0, `feat` bumps the minor version and `fix` the patch version. The release tags from hugomrdias/fil, such as `clipact-v0.4.0`, came with the move, so each package's next release starts from its last one.
 2. Merging a release pull request tags the release as `<component>-v<version>`, such as `clipact-v0.5.0`, and creates its GitHub release. You can merge the pull requests in any order.
