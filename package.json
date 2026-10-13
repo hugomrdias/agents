@@ -13,7 +13,7 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "lint:root": "biome check package.json tsconfig.json biome.json pnpm-workspace.yaml turbo.json skills-lock.json .github/release-please-config.json .github/.release-please-manifest.json",
+    "lint:root": "biome check package.json tsconfig.json biome.json pnpm-workspace.yaml turbo.json skills-lock.json .github/release-please-config.json .github/release-please-manifest.json",
     "check": "turbo run typecheck test lint && pnpm lint:root",
     "check:fix": "biome check --fix ."
   },
