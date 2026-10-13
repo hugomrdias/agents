@@ -4,14 +4,14 @@
   "description": "Vite plugin that publishes Agent Skills for agent skills discovery under /.well-known/agent-skills/",
   "license": "MIT",
   "author": "Hugo Dias <hugomrdias@gmail.com>",
-  "homepage": "https://github.com/hugomrdias/fil/tree/main/packages/vite-plugin-agent-skills#readme",
+  "homepage": "https://github.com/hugomrdias/agents/tree/main/packages/vite-plugin-agent-skills#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hugomrdias/fil.git",
+    "url": "git+https://github.com/hugomrdias/agents.git",
     "directory": "packages/vite-plugin-agent-skills"
   },
   "bugs": {
-    "url": "https://github.com/hugomrdias/fil/issues"
+    "url": "https://github.com/hugomrdias/agents/issues"
   },
   "type": "module",
   "exports": {

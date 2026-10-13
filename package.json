@@ -1,0 +1,33 @@
+{
+  "name": "agents-repo",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "lint:root": "biome check package.json tsconfig.json biome.json pnpm-workspace.yaml turbo.json skills-lock.json .github/release-please-config.json .github/.release-please-manifest.json",
+    "check": "turbo run typecheck test lint && pnpm lint:root",
+    "check:fix": "biome check --fix ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.13",
+    "@hugomrdias/configs": "1.1.3",
+    "turbo": "2.10.13",
+    "typescript": "catalog:"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.14.0",
+      "onFail": "download"
+    }
+  }
+}

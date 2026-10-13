@@ -4,14 +4,14 @@
   "description": "Small framework for Node.js CLIs that agents and humans can both rely on",
   "license": "MIT",
   "author": "Hugo Dias <hugomrdias@gmail.com>",
-  "homepage": "https://github.com/hugomrdias/fil/tree/main/packages/clipact#readme",
+  "homepage": "https://github.com/hugomrdias/agents/tree/main/packages/clipact#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hugomrdias/fil.git",
+    "url": "git+https://github.com/hugomrdias/agents.git",
     "directory": "packages/clipact"
   },
   "bugs": {
-    "url": "https://github.com/hugomrdias/fil/issues"
+    "url": "https://github.com/hugomrdias/agents/issues"
   },
   "type": "module",
   "exports": {

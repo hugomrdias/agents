@@ -96,7 +96,7 @@ There is no middleware system. The framework owns the cross-cutting concerns as 
 
 Fields listed in `secrets` come only from the environment. A value passed as a flag appears in process listings, shell history, and agent transcripts, and a value in an environment variable does not. The framework also redacts secrets in errors, `--debug` output, telemetry, and `schema` defaults.
 
-The mapping lives in the definition, not in schema metadata, so it works with any Standard Schema library. There are no CLI-wide settings, global flags, or profile files. Declare a value that every command needs, with its `env` mapping, in each command's `input`. A shared schema fragment avoids repeating it, such as `account` in [`fil`'s shared inputs](../../packages/fil-cli/src/commands/shared.ts).
+The mapping lives in the definition, not in schema metadata, so it works with any Standard Schema library. There are no CLI-wide settings, global flags, or profile files. Declare a value that every command needs, with its `env` mapping, in each command's `input`. A shared schema fragment avoids repeating it, such as `account` in [`fil`'s shared inputs](https://github.com/hugomrdias/fil/blob/main/packages/fil-cli/src/commands/shared.ts).
 
 ### Side effects
 
@@ -264,6 +264,6 @@ The framework depends only on the Standard Schema interfaces, so applications ch
 ## Milestones
 
 1. **Core (implemented).** Definitions, router, `parseArgs` integration, input merging and validation, envelope and errors, modes and agent detection, help, `schema`, signals and exit, and testing helpers.
-2. **Spike.** Validate the core on a real CLI, including a long-running, resumable command, and run the guideline tests in Claude Code, Codex, and Gemini CLI. [`fil`](../../packages/fil-cli/README.md) already runs on clipact, so only the harness runs remain.
+2. **Spike.** Validate the core on a real CLI, including a long-running, resumable command, and run the guideline tests in Claude Code, Codex, and Gemini CLI. [`fil`](https://github.com/hugomrdias/fil/blob/main/packages/fil-cli/README.md) already runs on clipact, so only the harness runs remain.
 3. **Services.** Telemetry, gating and dry-run polish, and the startup budget in CI. Skills are implemented.
 4. **Later.** NDJSON `--events`. Shell completions are implemented.

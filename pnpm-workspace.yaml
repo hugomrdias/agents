@@ -1,0 +1,11 @@
+packages:
+  - 'packages/*'
+  - 'examples/*'
+
+allowBuilds:
+  '@biomejs/biome': true
+  esbuild: true
+
+catalog:
+  '@types/node': 26.5.1
+  typescript: 7.0.2

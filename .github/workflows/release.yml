@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      paths_released: ${{ steps.release.outputs.paths_released }}
+    steps:
+      # Opens or updates one release pull request per package, and tags and
+      # creates the package's GitHub release when that pull request merges.
+      # Pull requests opened with GITHUB_TOKEN do not trigger CI, so
+      # RELEASE_PLEASE_TOKEN can hold a token that does.
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: npm
+    permissions:
+      contents: read
+      # npm trusted publishing exchanges this token for a short-lived publish
+      # token and signs the provenance statement.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm, Node.js, and dependencies
+        uses: pnpm/setup@v3
+        with:
+          require-lockfile: true
+
+      - name: Build and check packages
+        run: pnpm turbo run build typecheck test lint --filter='./packages/*'
+
+      # pnpm publish replaces workspace: and catalog: specifiers with versions.
+      # A recursive publish skips versions already on npm, so a rerun is safe.
+      - name: Publish released packages
+        env:
+          PATHS_RELEASED: ${{ needs.release-please.outputs.paths_released }}
+        run: |
+          set -euo pipefail
+          mapfile -t filters < <(jq -r '.[] | "--filter=./" + .' <<< "$PATHS_RELEASED")
+          pnpm -r "${filters[@]}" publish --provenance --no-git-checks

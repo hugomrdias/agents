@@ -91,7 +91,7 @@ export interface Cli {
 /**
  * Defines a CLI from its command tree.
  *
- * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/framework-design.md
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md
  */
 export function defineCli(definition: CliOptions): Cli {
   const defines = (name: string) =>

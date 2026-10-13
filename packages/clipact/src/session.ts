@@ -6,7 +6,7 @@ import { type Io, styler, writeAsync } from './io.ts'
  * Quiet time on stderr after which the latest progress event is repeated
  * with its elapsed time, so agent harnesses see the command is alive.
  *
- * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#output-size-and-long-running-commands
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#output-size-and-long-running-commands
  */
 export const HEARTBEAT_FIRST_MS = 15_000
 
@@ -32,7 +32,7 @@ export interface ErrorResult {
  * A result object as written to stdout in machine mode: exactly one of
  * `data` and `error`, then optional `next` steps.
  *
- * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#result-envelope
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#result-envelope
  */
 export type ResultObject = DataResult | ErrorResult
 
@@ -93,7 +93,7 @@ export class Session {
    * and then every {@link HEARTBEAT_MS}, it repeats the latest event with
    * its elapsed time, so handlers report each change once and never re-emit.
    *
-   * @see https://github.com/hugomrdias/fil/blob/main/docs/agent-cli/guidelines.md#output-size-and-long-running-commands
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#output-size-and-long-running-commands
    */
   progress(event: ProgressEvent): void {
     this.#current = { event, since: Date.now(), beats: 0 }
