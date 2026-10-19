@@ -3,7 +3,7 @@ import { whoami } from '../commands/whoami.ts'
 import { client } from './client.ts'
 
 export default defineHandler(whoami, async (ctx) => {
-  const api = await client(ctx.input, ctx.signal)
+  const api = await client(ctx)
   return ctx.ok({
     team: api.team,
     agent: ctx.mode.agent,

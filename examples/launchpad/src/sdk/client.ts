@@ -93,12 +93,19 @@ export interface ConnectOptions {
   token: string
   team: string
   signal?: AbortSignal
+  /** State directory; defaults to `<tmpdir>/launchpad-example`. */
+  home?: string
+  /** Mock delay per uploaded file, in milliseconds. */
+  latencyMs?: number
+  /** Rate limit every `listSites` call. */
+  rateLimit?: boolean
 }
 
-/** Returns the state file location. */
-function statePath(): string {
-  const home = process.env.LAUNCHPAD_HOME ?? join(tmpdir(), 'launchpad-example')
-  return join(home, 'state.json')
+/** Mock backend settings of a {@link Client}. */
+interface MockSettings {
+  statePath: string
+  latencyMs: number
+  rateLimit: boolean
 }
 
 /**
@@ -108,7 +115,14 @@ export async function connect(options: ConnectOptions): Promise<Client> {
   if (!options.token.startsWith('lp_')) {
     throw new UnauthorizedError('The API token is invalid.')
   }
-  const client = new Client(options.team, options.signal)
+  const client = new Client(options.team, options.signal, {
+    statePath: join(
+      options.home ?? join(tmpdir(), 'launchpad-example'),
+      'state.json'
+    ),
+    latencyMs: options.latencyMs ?? 150,
+    rateLimit: options.rateLimit ?? false,
+  })
   await client.load()
   return client
 }
@@ -117,18 +131,24 @@ export async function connect(options: ConnectOptions): Promise<Client> {
 export class Client {
   readonly team: string
   readonly #signal: AbortSignal | undefined
+  readonly #settings: MockSettings
   #state: State = { seq: 0, sites: [], deployments: [] }
 
   /** Use {@link connect}. */
-  constructor(team: string, signal?: AbortSignal) {
+  constructor(
+    team: string,
+    signal: AbortSignal | undefined,
+    settings: MockSettings
+  ) {
     this.team = team
     this.#signal = signal
+    this.#settings = settings
   }
 
   /** Reads the state file. */
   async load(): Promise<void> {
     try {
-      this.#state = JSON.parse(await readFile(statePath(), 'utf8'))
+      this.#state = JSON.parse(await readFile(this.#settings.statePath, 'utf8'))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error
@@ -138,7 +158,7 @@ export class Client {
 
   /** Writes the state file atomically. */
   async #save(): Promise<void> {
-    const path = statePath()
+    const path = this.#settings.statePath
     await mkdir(join(path, '..'), { recursive: true })
     await writeFile(`${path}.tmp`, JSON.stringify(this.#state, null, 2))
     await rename(`${path}.tmp`, path)
@@ -155,7 +175,7 @@ export class Client {
     sites: Site[]
     nextCursor: string | undefined
   } {
-    if (process.env.LAUNCHPAD_MOCK_RATE_LIMIT === '1') {
+    if (this.#settings.rateLimit) {
       throw new RateLimitError(5)
     }
     const sorted = [...this.#state.sites].sort((a, b) =>
@@ -268,8 +288,9 @@ export class Client {
 
   /** Uploads one file and records it immediately, so uploads can resume. */
   async uploadFile(id: string, path: string): Promise<void> {
-    const latency = Number(process.env.LAUNCHPAD_MOCK_LATENCY_MS ?? 150)
-    await setTimeout(latency, undefined, { signal: this.#signal })
+    await setTimeout(this.#settings.latencyMs, undefined, {
+      signal: this.#signal,
+    })
     const file = this.getDeployment(id).files.find(
       (candidate) => candidate.path === path
     )
