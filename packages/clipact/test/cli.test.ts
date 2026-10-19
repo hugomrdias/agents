@@ -792,6 +792,72 @@ describe('discovery', () => {
     assert.equal((flag.error as { code: string }).code, 'invalid_input')
   })
 
+  test('schema reports an unknown path in the deepest group it matched', async () => {
+    const expected = [
+      'artifacts put',
+      'artifacts get',
+      'artifacts ls',
+      'artifacts label',
+    ]
+    const unknown = assertContract(
+      await invoke(cli, ['schema', 'artifacts', 'nope'])
+    )
+    assert.deepEqual(unknown, {
+      error: {
+        code: 'invalid_input',
+        message: 'Unknown command "acme artifacts nope".',
+        retryable: false,
+        details: [
+          { path: 'command', message: 'Unknown command "nope"', expected },
+        ],
+      },
+      next: [
+        {
+          by: 'agent',
+          command: 'acme schema artifacts',
+          description: 'List the "artifacts" commands with descriptions',
+        },
+      ],
+    })
+    const typo = assertContract(
+      await invoke(cli, ['schema', 'artifacts', 'lst'])
+    )
+    assert.equal(
+      (typo.error as { message: string }).message,
+      'Unknown command "acme artifacts lst". Did you mean "ls"?'
+    )
+    assert.deepEqual(
+      (typo.next as { command: string }[]).map((step) => step.command),
+      ['acme artifacts ls --help', 'acme schema artifacts']
+    )
+  })
+
+  test('schema rejects words after a command', async () => {
+    const extra = assertContract(
+      await invoke(cli, ['schema', 'artifacts', 'put', 'extra'])
+    )
+    const error = extra.error as {
+      code: string
+      message: string
+      details: { expected: string[] }[]
+    }
+    assert.equal(error.code, 'invalid_input')
+    assert.equal(
+      error.message,
+      'Unknown command "acme artifacts put extra". Did you mean "put"?'
+    )
+    assert.deepEqual(error.details[0]?.expected, [
+      'artifacts put',
+      'artifacts get',
+      'artifacts ls',
+      'artifacts label',
+    ])
+    assert.deepEqual(
+      (extra.next as { command: string }[]).map((step) => step.command),
+      ['acme artifacts put --help', 'acme schema artifacts']
+    )
+  })
+
   test('a CLI command named schema replaces the built-in', async () => {
     const command: Command = defineCommand({
       name: 'schema',

@@ -9,9 +9,15 @@ import {
   leaves,
   markBuiltin,
 } from './define.ts'
-import type { ErrorRegistry } from './errors.ts'
+import type { CliError, ErrorRegistry } from './errors.ts'
 import { fromJsonSchema } from './json-schema.ts'
-import { closest, findNode, unknownCommand } from './route.ts'
+import {
+  closest,
+  findNode,
+  type Route,
+  route,
+  unknownCommand,
+} from './route.ts'
 import {
   type CommandSpec,
   JSON_SCHEMA_TARGET,
@@ -222,6 +228,35 @@ function redactSecrets(spec: CommandSpec): JsonSchema {
 }
 
 /**
+ * Builds the error for a `schema` path with words after the node it
+ * resolved to, such as `schema artifacts put extra`. It reports the deepest
+ * group on the path, so the `command` issue and `next` step stay in that
+ * group, like an unknown command on the command line.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#execution-pipeline
+ */
+function trailingWords(
+  cli: CliOptions,
+  root: Group,
+  routed: Extract<Route, { kind: 'node' }>
+): CliError {
+  const { node, path, rest } = routed
+  const groupPath = node.kind === 'group' ? path : path.slice(0, -1)
+  const group = findNode(root, groupPath) as Group
+  const unmatched = [...path.slice(groupPath.length), ...rest]
+  return unknownCommand(cli, {
+    kind: 'unknown',
+    group,
+    path: groupPath,
+    word: unmatched.join(' '),
+    suggestion: closest(
+      unmatched[0] as string,
+      group.commands.map((candidate) => candidate.name)
+    ),
+  })
+}
+
+/**
  * Builds the built-in `schema` command, which prints the JSON Schemas of a
  * command, or the command list of the CLI or a group, as one JSON object.
  *
@@ -243,20 +278,16 @@ export function schemaCommand(
     handler: async () => ({ default: handler }),
   })
   const handler = defineHandler(command, ({ input, ok }) => {
-    const path = input.command ?? []
-    const node = findNode(root, path)
-    if (!node) {
-      throw unknownCommand(cli, {
-        kind: 'unknown',
-        group: root,
-        path: [],
-        word: path.join(' '),
-        suggestion: closest(
-          path.join(' '),
-          leaves(root).map((leaf) => leaf.path)
-        ),
-      })
+    const words = input.command ?? []
+    // Route like a command line, so an unknown path names its deepest group.
+    const routed = route(root, words)
+    if (routed.kind === 'unknown') {
+      throw unknownCommand(cli, routed)
     }
+    if (routed.rest.length > 0) {
+      throw trailingWords(cli, root, routed)
+    }
+    const { node, path } = routed
     return ok(
       node.kind === 'command'
         ? commandSchema(resolveSpec(node, path.join(' ')), errors)
