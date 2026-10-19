@@ -10,7 +10,9 @@ import {
   markBuiltin,
 } from './define.ts'
 import type { CliError, ErrorRegistry } from './errors.ts'
+import { resolveGlobalsSpec } from './globals.ts'
 import { fromJsonSchema } from './json-schema.ts'
+import { frameworkVariables, resolveEnvPrefix } from './mode.ts'
 import {
   closest,
   findNode,
@@ -20,6 +22,7 @@ import {
 } from './route.ts'
 import {
   type CommandSpec,
+  type FieldSpec,
   JSON_SCHEMA_TARGET,
   type JsonSchema,
   resolveSpec,
@@ -140,13 +143,40 @@ export function listSchema(
   node: CommandNode,
   path: string[]
 ): Record<string, unknown> {
+  const isRoot = path.length === 0
+  const globals = isRoot ? globalsSchemaData(cli) : undefined
   return {
     name: cli.name,
     version: cli.version,
     commands: leaves(node, path).map(({ path: leafPath, command }) =>
       summary(leafPath, command)
     ),
+    ...(isRoot ? { env: frameworkVariables(resolveEnvPrefix(cli)) } : {}),
+    ...(globals ? { globals } : {}),
     result: RESULT_SCHEMA,
+  }
+}
+
+/**
+ * Describes the CLI's globals for `schema --list`: each field's variable,
+ * the secret fields, and the input JSON Schema without secret defaults.
+ * Returns `undefined` for a CLI without globals.
+ */
+export function globalsSchemaData(
+  cli: CliOptions
+): Record<string, unknown> | undefined {
+  if (!cli.globals) {
+    return undefined
+  }
+  const spec = resolveGlobalsSpec(cli.globals)
+  return {
+    env: Object.fromEntries(
+      spec.fields.map((field) => [field.name, field.env])
+    ),
+    secrets: spec.fields
+      .filter((field) => field.secret)
+      .map((field) => field.name),
+    input: redactSecrets(spec.inputJsonSchema, spec.fields),
   }
 }
 
@@ -179,7 +209,7 @@ export function commandSchema(
     idempotent: command.idempotent === true,
     confirm,
     dryRun: command.dryRun === true,
-    input: redactSecrets(spec),
+    input: redactSecrets(spec.inputJsonSchema, spec.fields),
     output: spec.outputJsonSchema ?? null,
     errors: describeErrors(registry, spec.errors),
   }
@@ -207,14 +237,17 @@ function describeErrors(
   )
 }
 
-/** Removes defaults of secret fields from the input JSON Schema. */
-function redactSecrets(spec: CommandSpec): JsonSchema {
-  const secrets = spec.fields.filter((field) => field.secret)
+/** Removes defaults and examples of secret fields from an input JSON Schema. */
+function redactSecrets(
+  inputJsonSchema: JsonSchema,
+  fields: FieldSpec[]
+): JsonSchema {
+  const secrets = fields.filter((field) => field.secret)
   if (secrets.length === 0) {
-    return spec.inputJsonSchema
+    return inputJsonSchema
   }
   const properties = {
-    ...(spec.inputJsonSchema.properties as Record<string, JsonSchema>),
+    ...(inputJsonSchema.properties as Record<string, JsonSchema>),
   }
   for (const field of secrets) {
     const {
@@ -224,7 +257,7 @@ function redactSecrets(spec: CommandSpec): JsonSchema {
     } = properties[field.name] ?? {}
     properties[field.name] = rest
   }
-  return { ...spec.inputJsonSchema, properties }
+  return { ...inputJsonSchema, properties }
 }
 
 /**
