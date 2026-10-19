@@ -84,7 +84,7 @@ describe('sites', () => {
       owner: 'web',
     })
 
-    const page = await run(['ls', '--limit', '2'])
+    const page = await run(['sites', 'list', '--limit', '2'])
     assert.deepEqual(
       (page.data.sites as { name: string }[]).map((s) => s.name),
       ['alpha', 'beta']
@@ -196,7 +196,7 @@ describe('sites', () => {
 
 describe('deploys', () => {
   test('dry run reports the plan without creating a deployment', async () => {
-    const result = await run(['deploy', 'alpha', site, '--dry-run'])
+    const result = await run(['deploys', 'create', 'alpha', site, '--dry-run'])
     const deployment = result.data.deployment as { files: number; id: string }
     assert.equal(result.data.dryRun, true)
     assert.equal(deployment.files, 2)

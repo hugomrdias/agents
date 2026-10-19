@@ -191,8 +191,6 @@ export interface CliOptions {
   /** Prefix of framework variables (`<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`); defaults to the name. */
   envPrefix?: string
   commands: CommandNode[]
-  /** Extra paths that resolve to a canonical command path, such as `{ publish: 'artifacts put' }`. */
-  aliases?: Record<string, string>
   /**
    * Directory of bundled skills (`<name>/SKILL.md`), such as
    * `new URL('../skills/', import.meta.url)`; adds the `skills` commands.
