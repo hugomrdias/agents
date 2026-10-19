@@ -81,11 +81,6 @@ describe('results', () => {
     assert.equal(dataOf(result).id, 'x1')
   })
 
-  test('resolves aliases to the canonical command', async () => {
-    const result = await invoke(cli, ['publish', 'a'], { env: KEY })
-    assert.equal(dataOf(result).ref, 'ref-2')
-  })
-
   test('accepts framework flags before the command path', async () => {
     const result = await invoke(cli, ['--json', 'artifacts', 'get', 'x'])
     assert.equal(dataOf(result).id, 'x')
@@ -713,7 +708,6 @@ describe('discovery', () => {
       privateKey: 'ACME_PRIVATE_KEY',
     })
     assert.deepEqual(put.confirm, { when: 'conditional' })
-    assert.deepEqual(put.aliases, ['publish'])
     assert.equal((put.input as { type: string }).type, 'object')
     assert.equal((put.output as { type: string }).type, 'object')
     const errors = put.errors as Record<
@@ -737,14 +731,9 @@ describe('discovery', () => {
     assert.equal(errors.invalid_input?.details?.type, 'array')
   })
 
-  test('schema resolves an alias to the canonical command', async () => {
-    const alias = assertContract(await invoke(cli, ['schema', 'publish']))
-    const canonical = assertContract(
-      await invoke(cli, ['schema', 'artifacts', 'put'])
-    )
-    assert.deepEqual(alias, canonical)
+  test('schema rejects a path past a command', async () => {
     const extra = assertContract(
-      await invoke(cli, ['schema', 'publish', 'extra'])
+      await invoke(cli, ['schema', 'artifacts', 'put', 'extra'])
     )
     assert.equal((extra.error as { code: string }).code, 'invalid_input')
   })
@@ -866,13 +855,6 @@ describe('discovery', () => {
     assert.deepEqual(
       (extra.next as { command: string }[]).map((step) => step.command),
       ['acme artifacts put --help', 'acme schema artifacts']
-    )
-    const alias = assertContract(
-      await invoke(cli, ['schema', 'publish', 'extra'])
-    )
-    assert.equal(
-      (alias.error as { message: string }).message,
-      'Unknown command "acme artifacts put extra". Did you mean "put"?'
     )
   })
 

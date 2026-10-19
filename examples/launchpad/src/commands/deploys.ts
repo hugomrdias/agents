@@ -9,7 +9,7 @@ export const create = defineCommand({
   examples: [
     'launchpad deploys create my-blog ./dist',
     'launchpad deploys create my-blog ./dist --prod --yes',
-    'launchpad deploy my-blog index.html about.html --dry-run',
+    'launchpad deploys create my-blog index.html about.html --dry-run',
   ],
   input: z.strictObject({
     ...auth,

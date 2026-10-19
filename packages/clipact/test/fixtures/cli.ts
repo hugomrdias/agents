@@ -7,7 +7,6 @@ export const cli = defineCli({
   version: '1.2.3',
   description: 'Example publishing CLI',
   commands,
-  aliases: { publish: 'artifacts put' },
   mapError: () => import('./map-error.ts'),
   errors: {
     insufficient_funds: {

@@ -146,14 +146,12 @@ export function listSchema(
     commands: leaves(node, path).map(({ path: leafPath, command }) =>
       summary(leafPath, command)
     ),
-    ...(cli.aliases && path.length === 0 ? { aliases: cli.aliases } : {}),
     result: RESULT_SCHEMA,
   }
 }
 
 /** Builds the `schema <command>` data: JSON Schemas, error codes, and behavior of one command. */
 export function commandSchema(
-  cli: CliOptions,
   spec: CommandSpec,
   registry: Readonly<ErrorRegistry>
 ): Record<string, unknown> {
@@ -184,9 +182,6 @@ export function commandSchema(
     input: redactSecrets(spec),
     output: spec.outputJsonSchema ?? null,
     errors: describeErrors(registry, spec.errors),
-    aliases: Object.entries(cli.aliases ?? {})
-      .filter(([, target]) => target === spec.path)
-      .map(([alias]) => alias),
   }
 }
 
@@ -284,8 +279,8 @@ export function schemaCommand(
   })
   const handler = defineHandler(command, ({ input, ok }) => {
     const words = input.command ?? []
-    // Route like a command line, so an alias resolves to its canonical path.
-    const routed = route(root, words, cli.aliases)
+    // Route like a command line, so an unknown path names its deepest group.
+    const routed = route(root, words)
     if (routed.kind === 'unknown') {
       throw unknownCommand(cli, routed)
     }
@@ -295,7 +290,7 @@ export function schemaCommand(
     const { node, path } = routed
     return ok(
       node.kind === 'command'
-        ? commandSchema(cli, resolveSpec(node, path.join(' ')), errors)
+        ? commandSchema(resolveSpec(node, path.join(' ')), errors)
         : listSchema(cli, node, path)
     )
   })

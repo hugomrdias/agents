@@ -87,15 +87,11 @@ function frameworkOptions(
  * the binary name, the last being the word under the cursor. Returns one
  * `value<TAB>description` line per candidate, or `:files` for file paths.
  */
-export function complete(
-  cli: CliOptions,
-  root: Group,
-  words: string[]
-): string {
+export function complete(root: Group, words: string[]): string {
   const current = words.at(-1) ?? ''
   let values: Values
   try {
-    values = candidates(cli, root, words.slice(0, -1), current)
+    values = candidates(root, words.slice(0, -1), current)
   } catch {
     // A broken definition must not print errors into the user's prompt.
     return ''
@@ -113,13 +109,8 @@ export function complete(
 }
 
 /** Lists candidates for the word after `before`. */
-function candidates(
-  cli: CliOptions,
-  root: Group,
-  before: string[],
-  current: string
-): Values {
-  const routed = route(root, before, cli.aliases)
+function candidates(root: Group, before: string[], current: string): Values {
+  const routed = route(root, before)
   if (routed.kind === 'unknown') {
     return []
   }
@@ -128,10 +119,9 @@ function candidates(
     if (current.startsWith('-')) {
       return flagCandidates(frameworkOptions(undefined, path.length === 0), [])
     }
-    return children(cli, node, path.length === 0)
+    return children(node, path.length === 0)
   }
   return commandCandidates(
-    cli,
     root,
     resolveSpec(node, path.join(' ')),
     rest,
@@ -139,30 +129,16 @@ function candidates(
   )
 }
 
-/** Lists the commands of a group, with aliases and built-ins at the root. */
-function children(cli: CliOptions, group: Group, isRoot: boolean): Candidate[] {
-  const list: Candidate[] = group.commands
-    .filter((child) => !isBuiltin(child))
-    .map((child) => ({ value: child.name, description: child.description }))
-  if (!isRoot) {
-    return list
-  }
-  for (const [alias, target] of Object.entries(cli.aliases ?? {})) {
-    if (!alias.includes(' ')) {
-      list.push({ value: alias, description: `Alias for ${target}` })
-    }
-  }
-  for (const child of group.commands) {
-    if (isBuiltin(child)) {
-      list.push({ value: child.name, description: child.description })
-    }
-  }
-  return list
+/** Lists the commands of a group, with built-ins last at the root. */
+function children(group: Group, isRoot: boolean): Candidate[] {
+  return [
+    ...group.commands.filter((child) => !isBuiltin(child)),
+    ...(isRoot ? group.commands.filter(isBuiltin) : []),
+  ].map((child) => ({ value: child.name, description: child.description }))
 }
 
 /** Lists candidates within a command: flag values, flags, or positionals. */
 function commandCandidates(
-  cli: CliOptions,
   root: Group,
   spec: CommandSpec,
   rest: string[],
@@ -212,7 +188,7 @@ function commandCandidates(
     // The words given so far for this field, such as a group name.
     const words = positionals.slice(spec.positionals.indexOf(field))
     const target = findNode(root, words)
-    return target?.kind === 'group' ? children(cli, target, false) : []
+    return target?.kind === 'group' ? children(target, false) : []
   }
   if (field) {
     return fieldValues(field)

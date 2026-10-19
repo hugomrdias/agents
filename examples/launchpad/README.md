@@ -28,12 +28,12 @@ Mock knobs, read only by the fake SDK: `LAUNCHPAD_HOME` (state directory, defaul
 
 | Command | Shows |
 | --- | --- |
-| `sites list` (alias `ls`) | `readOnly`; `--limit` with min/max and default; cursor pagination with `nextCursor` and a `next` step; a table `human` formatter; transient `rate_limited` that becomes retryable automatically |
+| `sites list` | `readOnly`; `--limit` with min/max and default; cursor pagination with `nextCursor` and a `next` step; a table `human` formatter; transient `rate_limited` that becomes retryable automatically |
 | `sites get <site>` | Required positional; `not_found` from `mapError` with an agent `next` step |
 | `sites create <name>` | Regex validation with a custom message; enum flags with defaults; `region` falling back to `LAUNCHPAD_REGION`; an object field (`--meta '{"owner":"web"}'`); the whole request from `--input -`; `conflict` from `mapError` |
 | `sites delete <site>` | Static `confirm`; `--yes`; `--dry-run` returning the same shape without side effects |
 | `sites domains add <site> <domains...>` | A nested group; a variadic positional; `idempotent`; a failure with partial data (`domains`) and both `user` and `agent` next steps |
-| `deploys create <site> <paths...>` (alias `deploy`) | Conditional `confirm` (only with `--prod`); `--dry-run`; a boolean flag; `ctx.log`, `ctx.progress`, and `ctx.checkpoint`; `ctx.signal` passed to the SDK; `file_not_found` listing every missing path |
+| `deploys create <site> <paths...>` | Conditional `confirm` (only with `--prod`); `--dry-run`; a boolean flag; `ctx.log`, `ctx.progress`, and `ctx.checkpoint`; `ctx.signal` passed to the SDK; `file_not_found` listing every missing path |
 | `deploys status <deployment>` | A `next` step that depends on state |
 | `deploys resume <deployment>` | Finishing an interrupted deployment from its persisted record |
 | `whoami` | `ctx.mode`: detected agent, format, and interactivity |
@@ -82,7 +82,7 @@ bin/launchpad.js          entry shim: enableCompileCache, then import('../dist/m
 scripts/build.ts          esbuild: one ESM entry plus a chunk per handler
 scripts/bench.ts          startup timing against node -e ''
 src/main.ts               cli.run()
-src/cli.ts                defineCli: commands, aliases, envPrefix, mapError, errors
+src/cli.ts                defineCli: commands, envPrefix, mapError, errors
 src/errors.ts             error registry: a description and details schema per code
 src/commands/*.ts         definitions only (zod + clipact)
 src/handlers/**           handlers, loaded lazily per command

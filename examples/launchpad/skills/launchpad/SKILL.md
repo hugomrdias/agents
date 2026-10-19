@@ -15,7 +15,7 @@ description: Deploy static sites with the launchpad CLI, check deployments, and 
 ## Workflow
 
 1. `launchpad sites list` or `launchpad sites get <site>` to find the site; `launchpad sites create <name>` if it does not exist.
-2. `launchpad deploy <site> <paths...> --dry-run` to see what would be uploaded, then run it without `--dry-run`.
+2. `launchpad deploys create <site> <paths...> --dry-run` to see what would be uploaded, then run it without `--dry-run`.
 3. Return the `url` from the result's `data` to the user exactly as given.
 
 ## Rules
