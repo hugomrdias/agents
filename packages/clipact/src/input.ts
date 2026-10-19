@@ -1,7 +1,9 @@
 import { StringDecoder } from 'node:string_decoder'
 import { parseArgs } from 'node:util'
+import type { StandardSchemaV1 } from '@standard-schema/spec'
 import { type Env, parseBoolean } from './agent.ts'
 import { CliError, type InputIssue } from './errors.ts'
+import type { GlobalsSpec } from './globals.ts'
 import type { Io } from './io.ts'
 import { closest, FRAMEWORK_FLAGS } from './route.ts'
 import type { CommandSpec, FieldKind, FieldSpec } from './spec.ts'
@@ -57,18 +59,14 @@ export async function resolveInput(
       throw invalidInput(issues)
     }
   }
-  applyEnv(spec, io.env, collected)
+  applyEnv(spec.fields, io.env, collected)
   rejectControlCharacters(collected)
 
   const flagged = new Set(issues.map((issue) => issue.path))
   const result = await spec.input['~standard'].validate(values)
   if (result.issues) {
     for (const issue of result.issues) {
-      const path = (issue.path ?? [])
-        .map((part) =>
-          typeof part === 'object' ? String(part.key) : String(part)
-        )
-        .join('.')
+      const path = issuePath(issue)
       const field = path.split('.')[0] ?? ''
       if (flagged.has(field)) {
         continue
@@ -99,6 +97,82 @@ export async function resolveInput(
     }
   }
   return { value, sources, framework }
+}
+
+/** Validated globals, where each value came from, and the problems found. */
+export interface ResolvedGlobals {
+  value: Record<string, unknown>
+  sources: Record<string, string>
+  /** Issues name the environment variable, such as `ACME_API_URL`, as their path. */
+  issues: InputIssue[]
+}
+
+/**
+ * Reads the CLI's globals from their environment variables and validates
+ * them against the globals schema. Returns the issues instead of throwing,
+ * so they are reported together with invalid framework variables.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#environment-variables-and-secrets
+ */
+export async function resolveGlobals(
+  spec: GlobalsSpec,
+  env: Env
+): Promise<ResolvedGlobals> {
+  const collected: Collected = { values: {}, sources: {}, issues: [] }
+  const { values, sources, issues } = collected
+  applyEnv(spec.fields, env, collected)
+  rejectControlCharacters(collected)
+
+  const flagged = new Set(issues.map((issue) => issue.path))
+  const result = await spec.globals.input['~standard'].validate(values)
+  if (result.issues) {
+    for (const issue of result.issues) {
+      const path = issuePath(issue)
+      const field = path.split('.')[0] ?? ''
+      if (flagged.has(field)) {
+        continue
+      }
+      const fieldSpec = spec.fields.find(
+        (candidate) => candidate.name === field
+      )
+      const source = sources[field]
+      const expected = rejectedEnum(fieldSpec, values[field], path)
+      issues.push({
+        path,
+        ...(source ? { source } : {}),
+        message:
+          fieldSpec && values[field] === undefined && path === field
+            ? `Required; set ${fieldSpec.env}`
+            : issue.message,
+        ...(expected ? { expected } : {}),
+      })
+    }
+  }
+  // Globals have no flags, so issues name the variable instead of the field.
+  for (const issue of issues) {
+    const [field = '', ...rest] = issue.path.split('.')
+    const variable = spec.fields.find(
+      (candidate) => candidate.name === field
+    )?.env
+    if (variable) {
+      issue.path = [variable, ...rest].join('.')
+    }
+  }
+  const value =
+    'value' in result ? (result.value as Record<string, unknown>) : {}
+  for (const field of spec.fields) {
+    if (!(field.name in sources) && value[field.name] !== undefined) {
+      sources[field.name] = 'default'
+    }
+  }
+  return { value, sources, issues }
+}
+
+/** Joins a Standard Schema issue path with dots, such as `tags.1`. */
+function issuePath(issue: StandardSchemaV1.Issue): string {
+  return (issue.path ?? [])
+    .map((part) => (typeof part === 'object' ? String(part.key) : String(part)))
+    .join('.')
 }
 
 /** Creates the `invalid_input` error from all input issues. */
@@ -354,11 +428,11 @@ async function mergeInputJson(
 
 /** Fills missing fields from their environment variables. */
 function applyEnv(
-  spec: CommandSpec,
+  fields: FieldSpec[],
   env: Env,
   { values, sources, issues }: Collected
 ): void {
-  for (const field of spec.fields) {
+  for (const field of fields) {
     if (!field.env || field.name in values) {
       continue
     }

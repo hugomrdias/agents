@@ -7,7 +7,7 @@ import { summarize, uploadRemaining } from './upload.ts'
 export default defineHandler(create, async (ctx) => {
   const { site: siteName, paths, prod } = ctx.input
   const files = await collectFiles(paths)
-  const api = await client(ctx.input, ctx.signal)
+  const api = await client(ctx)
   const site = api.getSite(siteName)
 
   if (ctx.dryRun) {

@@ -4,8 +4,10 @@ import { Readable } from 'node:stream'
 import type { Env } from './agent.ts'
 import type { Cli, Outcome } from './cli.ts'
 import { leaves } from './define.ts'
-import { commandSchema } from './discovery.ts'
+import { commandSchema, globalsSchemaData } from './discovery.ts'
+import { resolveGlobalsSpec } from './globals.ts'
 import type { OutputStream } from './io.ts'
+import { frameworkVariables } from './mode.ts'
 import { JSON_SCHEMA_TARGET, resolveSpec } from './spec.ts'
 
 /** Captured output of one invocation. */
@@ -21,7 +23,11 @@ export interface RunResult {
 
 /** Options for {@link invoke}. */
 export interface InvokeOptions {
-  /** Environment; empty by default so the test runner's agent variables do not leak in. */
+  /**
+   * Environment for framework variables, command `env` fallbacks, and
+   * globals; empty by default so the test runner's agent variables do not
+   * leak in. `process.env` is never read.
+   */
   env?: Env
   /** Text to read from stdin, or a stream, such as one that never ends. */
   stdin?: string | NodeJS.ReadableStream
@@ -93,7 +99,7 @@ export async function invoke(
 
 /** Options for {@link exec}. */
 export interface ExecOptions {
-  /** Added to a minimal environment containing only `PATH`. */
+  /** Added to a minimal environment containing only `PATH`, such as globals and secrets. */
   env?: Env
   stdin?: string
   /** Sends this signal once stderr contains `when`, or after `afterMs`. */
@@ -265,12 +271,35 @@ export function assertContract(result: RunResult): Record<string, unknown> {
 }
 
 /**
- * Resolves every command definition, checks that each error code is in the
- * CLI's registry, and converts every output and `details` schema to JSON
- * Schema; throws one error listing all problems.
+ * Resolves every command definition and the globals, checks that each error
+ * code is in the CLI's registry, that no environment variable is used by
+ * both the globals and a command or a framework variable, and converts every
+ * output and `details` schema to JSON Schema; throws one error listing all
+ * problems.
  */
 export function assertDefinitions(cli: Cli): void {
   const problems: string[] = []
+  // Each variable claimed so far, and who claimed it.
+  const owners = new Map<string, string>()
+  for (const variable of Object.values(frameworkVariables(cli.envPrefix))) {
+    owners.set(variable, 'a framework variable')
+  }
+  if (cli.options.globals) {
+    try {
+      for (const field of resolveGlobalsSpec(cli.options.globals).fields) {
+        const variable = field.env as string
+        const owner = owners.get(variable)
+        if (owner) {
+          problems.push(
+            `Invalid globals: ${variable} of "${field.name}" is also ${owner}`
+          )
+        }
+        owners.set(variable, `the global "${field.name}"`)
+      }
+    } catch (error) {
+      problems.push((error as Error).message)
+    }
+  }
   for (const [code, definition] of Object.entries(cli.errors)) {
     try {
       definition.details?.['~standard'].jsonSchema.output(JSON_SCHEMA_TARGET)
@@ -289,6 +318,14 @@ export function assertDefinitions(cli: Cli): void {
         problems.push(
           `Invalid definition for "${path}": output must be an object or an array schema`
         )
+      }
+      for (const field of spec.fields) {
+        const owner = field.env && owners.get(field.env)
+        if (owner) {
+          problems.push(
+            `Invalid definition for "${path}": ${field.env} of "${field.name}" is also ${owner}`
+          )
+        }
       }
       for (const code of spec.errors) {
         if (!(code in cli.errors)) {
@@ -312,4 +349,13 @@ export function schemas(cli: Cli): Record<string, Record<string, unknown>> {
       commandSchema(resolveSpec(command, path), cli.errors),
     ])
   )
+}
+
+/**
+ * Returns the `globals` block of `schema --list` (each field's variable, the
+ * secret fields, and the input JSON Schema) for snapshot tests, or
+ * `undefined` for a CLI without globals.
+ */
+export function globalsSchema(cli: Cli): Record<string, unknown> | undefined {
+  return globalsSchemaData(cli.options)
 }

@@ -70,6 +70,12 @@ const cases = (): Case[] => [
     undefined,
     { LAUNCHPAD_MOCK_RATE_LIMIT: '1' },
   ],
+  [
+    ['sites', 'list'],
+    'invalid_input',
+    undefined,
+    { LAUNCHPAD_MOCK_LATENCY_MS: 'fast' },
+  ],
   [['deploys', 'create', 'contract', site, '--prod'], 'confirmation_required'],
   [['deploys', 'create', 'contract', site, '--prod', '--dry-run'], 'ok'],
   [

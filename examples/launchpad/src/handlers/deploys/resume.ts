@@ -4,7 +4,7 @@ import { client } from '../client.ts'
 import { summarize, uploadRemaining } from './upload.ts'
 
 export default defineHandler(resume, async (ctx) => {
-  const api = await client(ctx.input, ctx.signal)
+  const api = await client(ctx)
   const existing = api.getDeployment(ctx.input.deployment)
   const deployment =
     existing.status === 'ready'

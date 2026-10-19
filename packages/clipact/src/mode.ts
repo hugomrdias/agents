@@ -1,8 +1,26 @@
 import { detectAgent, isSet, parseBoolean } from './agent.ts'
-import type { Mode } from './define.ts'
+import type { CliOptions, Mode } from './define.ts'
 import type { InputIssue } from './errors.ts'
 import type { Io } from './io.ts'
 import type { GlobalFlags } from './route.ts'
+
+/**
+ * Returns the framework variable prefix: `envPrefix`, or the CLI name,
+ * upper-cased with each run of other characters replaced by `_`.
+ */
+export function resolveEnvPrefix(
+  cli: Pick<CliOptions, 'name' | 'envPrefix'>
+): string {
+  return (cli.envPrefix ?? cli.name).toUpperCase().replace(/[^A-Z0-9]+/g, '_')
+}
+
+/** Names of the framework variables for a prefix, such as `ACME_OUTPUT`. */
+export function frameworkVariables(prefix: string): {
+  output: string
+  agent: string
+} {
+  return { output: `${prefix}_OUTPUT`, agent: `${prefix}_AGENT` }
+}
 
 /** Returns `true` for a supported output format. */
 function isFormat(value: string | undefined): value is Mode['format'] {
@@ -23,8 +41,8 @@ export function resolveMode(
   prefix: string
 ): { mode: Mode; issues: InputIssue[] } {
   const issues: InputIssue[] = []
-  const agentVariable = `${prefix}_AGENT`
-  const outputVariable = `${prefix}_OUTPUT`
+  const { agent: agentVariable, output: outputVariable } =
+    frameworkVariables(prefix)
 
   let override = flags.agent
   const rawAgent = io.env[agentVariable]

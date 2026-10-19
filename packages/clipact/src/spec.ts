@@ -85,55 +85,15 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
     return cached
   }
   const input: Schema = command.input ?? EMPTY_INPUT
-  const inputJsonSchema =
-    input['~standard'].jsonSchema.input(JSON_SCHEMA_TARGET)
-  if (inputJsonSchema.type !== 'object') {
-    throw new DefinitionError(path, 'input must be an object schema')
-  }
-  const properties = (inputJsonSchema.properties ?? {}) as Record<
-    string,
-    JsonSchema
-  >
-  const required = new Set((inputJsonSchema.required ?? []) as string[])
   const positionalNames: string[] = command.positionals ?? []
-  const secrets = new Set<string>(command.secrets ?? [])
-  const env: Record<string, string | undefined> = command.env ?? {}
-
-  for (const name of [...positionalNames, ...secrets, ...Object.keys(env)]) {
-    if (!(name in properties)) {
-      throw new DefinitionError(path, `"${name}" is not an input field`)
-    }
-  }
-
-  const fields: FieldSpec[] = Object.entries(properties).map(
-    ([name, schema]) => {
-      const resolved = deref(schema, inputJsonSchema)
-      const kind = kindOf(resolved, inputJsonSchema)
-      const items =
-        kind === 'array'
-          ? deref((resolved.items ?? {}) as JsonSchema, inputJsonSchema)
-          : undefined
-      const index = positionalNames.indexOf(name)
-      return {
-        name,
-        flag: toFlag(name),
-        kind,
-        itemKind: items ? kindOf(items, inputJsonSchema) : 'unknown',
-        required: required.has(name),
-        description:
-          (resolved.description as string | undefined) ??
-          (schema.description as string | undefined),
-        default: schema.default ?? resolved.default,
-        enum: (resolved.enum ?? items?.enum) as unknown[] | undefined,
-        positional: index !== -1,
-        variadic:
-          index !== -1 &&
-          index === positionalNames.length - 1 &&
-          kind === 'array',
-        env: env[name],
-        secret: secrets.has(name),
-      }
-    }
+  const { inputJsonSchema, fields } = resolveFields(
+    input,
+    {
+      env: command.env ?? {},
+      secrets: command.secrets ?? [],
+      positionals: positionalNames,
+    },
+    path
   )
 
   const byName = new Map(fields.map((field) => [field.name, field]))
@@ -206,6 +166,72 @@ export function resolveSpec(command: AnyCommand, path: string): CommandSpec {
   }
   cache.set(command, spec)
   return spec
+}
+
+/** How an input schema's fields map to positionals and environment variables. */
+export interface FieldOptions {
+  env: Record<string, string | undefined>
+  secrets: string[]
+  positionals: string[]
+}
+
+/**
+ * Converts an input schema to JSON Schema and describes each of its fields.
+ * `path` names the definition in errors, such as a command path or `globals`.
+ */
+export function resolveFields(
+  input: Schema,
+  options: FieldOptions,
+  path: string
+): { inputJsonSchema: JsonSchema; fields: FieldSpec[] } {
+  const inputJsonSchema =
+    input['~standard'].jsonSchema.input(JSON_SCHEMA_TARGET)
+  if (inputJsonSchema.type !== 'object') {
+    throw new DefinitionError(path, 'input must be an object schema')
+  }
+  const properties = (inputJsonSchema.properties ?? {}) as Record<
+    string,
+    JsonSchema
+  >
+  const required = new Set((inputJsonSchema.required ?? []) as string[])
+  const { env, positionals } = options
+  const secrets = new Set(options.secrets)
+
+  for (const name of [...positionals, ...secrets, ...Object.keys(env)]) {
+    if (!(name in properties)) {
+      throw new DefinitionError(path, `"${name}" is not an input field`)
+    }
+  }
+
+  const fields: FieldSpec[] = Object.entries(properties).map(
+    ([name, schema]) => {
+      const resolved = deref(schema, inputJsonSchema)
+      const kind = kindOf(resolved, inputJsonSchema)
+      const items =
+        kind === 'array'
+          ? deref((resolved.items ?? {}) as JsonSchema, inputJsonSchema)
+          : undefined
+      const index = positionals.indexOf(name)
+      return {
+        name,
+        flag: toFlag(name),
+        kind,
+        itemKind: items ? kindOf(items, inputJsonSchema) : 'unknown',
+        required: required.has(name),
+        description:
+          (resolved.description as string | undefined) ??
+          (schema.description as string | undefined),
+        default: schema.default ?? resolved.default,
+        enum: (resolved.enum ?? items?.enum) as unknown[] | undefined,
+        positional: index !== -1,
+        variadic:
+          index !== -1 && index === positionals.length - 1 && kind === 'array',
+        env: env[name],
+        secret: secrets.has(name),
+      }
+    }
+  )
+  return { inputJsonSchema, fields }
 }
 
 /** Follows a local `$ref` such as `#/$defs/Network`. */

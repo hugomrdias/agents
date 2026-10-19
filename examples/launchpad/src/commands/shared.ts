@@ -2,7 +2,7 @@ import * as z from 'zod'
 
 /**
  * Input fields every API command needs. Spread into each command's input
- * schema; there are no global options in clipact.
+ * schema: unlike globals, `team` is also a flag.
  */
 export const auth = {
   token: z.string().describe('API token; starts with lp_'),

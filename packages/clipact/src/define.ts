@@ -3,6 +3,7 @@ import type {
   StandardSchemaV1,
 } from '@standard-schema/spec'
 import type { CliError, ErrorRegistry, Next } from './errors.ts'
+import type { AnyGlobals } from './globals.ts'
 
 /**
  * A schema that validates and exports JSON Schema, such as a zod v4 schema.
@@ -188,8 +189,15 @@ export interface CliOptions {
   name: string
   version: string
   description?: string
-  /** Prefix of framework variables (`<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`); defaults to the name. */
+  /** Prefix of framework variables (`<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`); defaults to the name. Not applied to `globals` or command `env` names. */
   envPrefix?: string
+  /**
+   * CLI-wide settings read only from environment variables, created by
+   * `defineGlobals`. Handlers read them with `globals.get(ctx)`.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#environment-variables-and-secrets
+   */
+  globals?: AnyGlobals
   commands: CommandNode[]
   /**
    * Directory of bundled skills (`<name>/SKILL.md`), such as

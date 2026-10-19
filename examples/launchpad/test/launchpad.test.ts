@@ -8,13 +8,18 @@ import {
   assertContract,
   assertDefinitions,
   exec,
+  globalsSchema,
   invoke,
   schemas,
 } from 'clipact/testing'
 import { cli } from '../src/cli.ts'
 
 const BIN = fileURLToPath(new URL('../bin/launchpad.js', import.meta.url))
-const env = { LAUNCHPAD_TOKEN: 'lp_test' }
+// Globals come from the env given to invoke, so tests never touch process.env.
+const env: Record<string, string> = {
+  LAUNCHPAD_TOKEN: 'lp_test',
+  LAUNCHPAD_MOCK_LATENCY_MS: '0',
+}
 let site: string
 
 /** Runs the CLI in process and returns the asserted result and its `data`. */
@@ -30,9 +35,7 @@ function code(json: Record<string, unknown>): string | undefined {
 }
 
 before(async () => {
-  // The mock SDK reads its knobs from the real environment.
-  process.env.LAUNCHPAD_HOME = await mkdtemp(join(tmpdir(), 'launchpad-test-'))
-  process.env.LAUNCHPAD_MOCK_LATENCY_MS = '0'
+  env.LAUNCHPAD_HOME = await mkdtemp(join(tmpdir(), 'launchpad-test-'))
   site = await mkdtemp(join(tmpdir(), 'launchpad-site-'))
   await mkdir(join(site, 'assets'))
   await writeFile(join(site, 'index.html'), '<h1>hi</h1>')
@@ -55,6 +58,11 @@ test('definitions are valid and every command has a schema', () => {
     'skills status',
     'skills uninstall',
   ])
+  assert.deepEqual(globalsSchema(cli)?.env, {
+    home: 'LAUNCHPAD_HOME',
+    mockLatencyMs: 'LAUNCHPAD_MOCK_LATENCY_MS',
+    mockRateLimit: 'LAUNCHPAD_MOCK_RATE_LIMIT',
+  })
 })
 
 describe('sites', () => {
@@ -112,18 +120,28 @@ describe('sites', () => {
   })
 
   test('rate limits are retryable only for read-only commands', async () => {
-    process.env.LAUNCHPAD_MOCK_RATE_LIMIT = '1'
-    try {
-      const result = await run(['sites', 'list'])
-      assert.deepEqual(result.json.error, {
-        code: 'rate_limited',
-        message: 'Too many requests.',
-        retryable: true,
-        retryAfterSeconds: 5,
-      })
-    } finally {
-      delete process.env.LAUNCHPAD_MOCK_RATE_LIMIT
-    }
+    const result = await run(['sites', 'list'], {
+      env: { ...env, LAUNCHPAD_MOCK_RATE_LIMIT: '1' },
+    })
+    assert.deepEqual(result.json.error, {
+      code: 'rate_limited',
+      message: 'Too many requests.',
+      retryable: true,
+      retryAfterSeconds: 5,
+    })
+  })
+
+  test('rejects an invalid global before running the command', async () => {
+    const result = await run(['sites', 'list'], {
+      env: { ...env, LAUNCHPAD_MOCK_LATENCY_MS: 'fast' },
+    })
+    assert.equal(code(result.json), 'invalid_input')
+    assert.deepEqual(
+      (result.json.error as { details: { path: string }[] }).details.map(
+        (issue) => issue.path
+      ),
+      ['LAUNCHPAD_MOCK_LATENCY_MS']
+    )
   })
 
   test('validates input and keeps secrets out of flags', async () => {
@@ -256,7 +274,7 @@ describe('deploys', () => {
 describe('built binary', () => {
   const binEnv = () => ({
     ...env,
-    LAUNCHPAD_HOME: process.env.LAUNCHPAD_HOME,
+    LAUNCHPAD_HOME: env.LAUNCHPAD_HOME,
     LAUNCHPAD_MOCK_LATENCY_MS: '200',
   })
 

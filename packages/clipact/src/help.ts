@@ -5,6 +5,8 @@ import {
   isBuiltin,
   leaves,
 } from './define.ts'
+import { resolveGlobalsSpec } from './globals.ts'
+import { frameworkVariables, resolveEnvPrefix } from './mode.ts'
 import { FRAMEWORK_FLAGS, type FrameworkFlag, flagTokens } from './route.ts'
 import {
   type CommandSpec,
@@ -92,6 +94,44 @@ function fieldNotes(field: FieldSpec): string {
   }
   const text = field.description ?? ''
   return notes.length > 0 ? `${text} (${notes.join('; ')})`.trim() : text
+}
+
+/**
+ * Lists the CLI's environment variables for root help: each global, then
+ * the framework variables.
+ */
+function environmentRows(cli: CliOptions): [string, string][] {
+  const rows: [string, string][] = []
+  if (cli.globals) {
+    for (const field of resolveGlobalsSpec(cli.globals).fields) {
+      const notes: string[] = []
+      if (field.required) {
+        notes.push('required')
+      }
+      if (field.default !== undefined && !field.secret) {
+        notes.push(`default: ${JSON.stringify(field.default)}`)
+      }
+      if (field.secret) {
+        notes.push('secret')
+      }
+      const text = field.description ?? field.name
+      rows.push([
+        field.env as string,
+        notes.length > 0 ? `${text} (${notes.join('; ')})` : text,
+      ])
+    }
+  }
+  const { output, agent } = frameworkVariables(resolveEnvPrefix(cli))
+  rows.push([output, 'Default output format: json or human'])
+  rows.push([agent, 'Force or disable agent mode: 1, 0, true, or false'])
+  return rows
+}
+
+/** Points command help at the global variables listed in root help. */
+function globalsPointer(cli: CliOptions): string | undefined {
+  return cli.globals
+    ? `Global environment variables: ${cli.name} --help`
+    : undefined
 }
 
 /** Lists the output fields of a JSON Schema as `name (type)`. */
@@ -186,12 +226,20 @@ export function commandHelp(
     }
     sections.push(`Error codes: ${spec.errors.join(', ')}`)
     sections.push(sideEffects(command).join('\n'))
+    const pointer = globalsPointer(cli)
+    if (pointer) {
+      sections.push(pointer)
+    }
     sections.push(`${CONTRACT}\nFull schema: ${cli.name} schema ${spec.path}`)
   } else {
     if (examples) {
       sections.push(examples)
     }
     sections.push(sideEffects(command).join('\n'))
+    const pointer = globalsPointer(cli)
+    if (pointer) {
+      sections.push(pointer)
+    }
     sections.push(globalFlags())
   }
   return `${sections.join('\n\n')}\n`
@@ -235,6 +283,7 @@ export function groupHelp(
     if (builtins.length > 0) {
       sections.push(`Built-in:\n${columns(builtins)}`)
     }
+    sections.push(`Environment:\n${columns(environmentRows(cli))}`)
   }
   if (agent) {
     sections.push(
