@@ -373,6 +373,8 @@ An unknown command gets the same `expected` list, and suggests the closest name:
 {"error":{"code":"invalid_input","message":"Unknown command \"acme artifact\". Did you mean \"artifacts\"?","retryable":false,"details":[{"path":"command","message":"Unknown command \"artifact\"","expected":["artifacts put","artifacts get","artifacts ls","artifacts label"]}]},"next":[{"by":"agent","command":"acme artifacts --help","description":"Show help for \"artifacts\""},{"by":"agent","command":"acme schema --list","description":"List all commands with descriptions"}]}
 ```
 
+`acme schema <path>` reports a path that names no command or group in the same way. The error names the deepest group the path matched, so `acme schema artifacts nope` lists only the `artifacts` commands and points to `acme schema artifacts`. Words after a command, such as `acme schema artifacts put extra`, are also `invalid_input`.
+
 Agent help for a command looks like this:
 
 ```text
