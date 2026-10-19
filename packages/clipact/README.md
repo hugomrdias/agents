@@ -102,7 +102,6 @@ defineCli({
   version: '1.0.0',
   description: 'Example publishing CLI',
   commands,
-  aliases: { publish: 'artifacts put' },
   mapError: () => import('./map-error.js'),
   errors: {
     insufficient_funds: { description: 'The payer cannot cover the storage lockup.' },
@@ -355,8 +354,8 @@ clipact registers its signal listeners with `process.once`, so a second signal e
 | `acme --version` | The version, on stdout |
 | `acme --help`, `acme <group> --help` | Every command below that point, with descriptions |
 | `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, and side effects |
-| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], aliases, result }`, where `result` is the JSON Schema of the result envelope |
-| `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors, aliases }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
+| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], result }`, where `result` is the JSON Schema of the result envelope |
+| `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
 None of these commands loads handlers, reads credentials, or uses the network. In human mode, `schema` pretty-prints its `data`.
@@ -412,7 +411,7 @@ acme completion fish > ~/.config/fish/completions/acme.fish
 
 On each Tab, the script runs the hidden `acme __complete <words…>` command. That command answers from the definitions without loading handlers, so completions always match the installed version. `__complete` suggests these candidates:
 
-- Commands, groups, single-word aliases, and the `schema` and `completion` built-ins. zsh and fish also show descriptions.
+- Commands, groups, and the `schema` and `completion` built-ins. zsh and fish also show descriptions.
 - A command's flags, then the framework flags. It leaves out positional fields, secrets, and flags already given. Array flags can repeat.
 - Values for `--flag value` and `--flag=value`. These are the field's `enum` values, or file paths for string fields and `--input`. Numbers get no candidates.
 - Positionals, the same way and in order, then flags once every positional is filled.
@@ -498,7 +497,6 @@ Creates a CLI from its command tree.
 | `description` | `string?` | Shown in root help. |
 | `envPrefix` | `string?` | Prefix of framework variables. Defaults to the name. |
 | `commands` | `CommandNode[]` | Top-level commands and groups. |
-| `aliases` | `Record<string, string>?` | Extra paths for canonical paths, such as `{ publish: 'artifacts put' }`. Multi-word aliases are allowed. Help, `schema`, and errors use the canonical path. |
 | `skills` | `URL \| string`? | Directory of bundled skills (`<name>/SKILL.md`). Adds the [`skills` commands](#agent-skills). |
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
 | `errors` | `ErrorRegistry?` | Every error code the commands return besides the built-in codes, as `{ [code]: { description, details? } }`, where `details` is a `Schema`. See [Errors](#errors). |

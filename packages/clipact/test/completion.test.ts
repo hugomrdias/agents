@@ -53,12 +53,11 @@ function runShell(shell: string, args: string[], dir: string, script: string) {
 }
 
 describe('__complete', () => {
-  test('completes commands, aliases, and built-ins at the root', async () => {
+  test('completes commands and built-ins at the root', async () => {
     assert.deepEqual(await complete(''), [
       'artifacts\tPublish and manage artifacts',
       'operations\tLong-running operations',
       'broken\tReturn invalid output',
-      'publish\tAlias for artifacts put',
       'schema\tJSON Schema for a command, or the command list',
       'completion\tPrint a bash, zsh, or fish completion script',
     ])
@@ -98,7 +97,7 @@ describe('__complete', () => {
     )
     assert.ok(later.includes('--tags'), 'arrays are repeatable')
     assert.ok(!later.includes('--entry'))
-    assert.deepEqual(await values('publish', '--net'), ['--network'])
+    assert.deepEqual(await values('artifacts', 'put', '--net'), ['--network'])
   })
 
   test('completes flag values, positionals, and file paths', async () => {

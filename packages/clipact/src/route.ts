@@ -5,7 +5,7 @@ import {
   type Group,
   leaves,
 } from './define.ts'
-import { CliError, DefinitionError, type Next } from './errors.ts'
+import { CliError, type Next } from './errors.ts'
 
 /** A flag owned by the framework rather than a command's input. */
 export interface FrameworkFlag {
@@ -186,7 +186,7 @@ function leadingWords(args: string[]): Word[] {
   return words
 }
 
-/** Finds a node by its canonical path below `root`. */
+/** Finds a node by its path below `root`. */
 export function findNode(root: Group, path: string[]): CommandNode | undefined {
   let node: CommandNode = root
   for (const name of path) {
@@ -204,42 +204,15 @@ export function findNode(root: Group, path: string[]): CommandNode | undefined {
   return node
 }
 
-/**
- * Routes leading positional words through groups until a command is
- * reached, resolving aliases.
- */
-export function route(
-  root: Group,
-  args: string[],
-  aliases: Record<string, string> = {}
-): Route {
-  const words = leadingWords(args)
+/** Routes leading positional words through groups until a command is reached. */
+export function route(root: Group, args: string[]): Route {
   let node: CommandNode = root
   const path: string[] = []
   const consumed: number[] = []
-  let position = 0
-
-  const sortedAliases = Object.entries(aliases).sort(
-    ([a], [b]) => b.split(' ').length - a.split(' ').length
-  )
-  for (const [alias, target] of sortedAliases) {
-    const aliasWords = alias.split(' ')
-    if (aliasWords.every((word, index) => words[index]?.value === word)) {
-      const targetPath = target.split(' ')
-      const resolved = findNode(root, targetPath)
-      if (!resolved) {
-        throw new DefinitionError(alias, `alias target "${target}" not found`)
-      }
-      node = resolved
-      path.push(...targetPath)
-      consumed.push(...words.slice(0, aliasWords.length).map((w) => w.index))
-      position = aliasWords.length
+  for (const word of leadingWords(args)) {
+    if (node.kind !== 'group') {
       break
     }
-  }
-
-  while (node.kind === 'group' && position < words.length) {
-    const word = words[position] as Word
     const group: Group = node
     const child = group.commands.find(
       (candidate) => candidate.name === word.value
@@ -259,7 +232,6 @@ export function route(
     node = child
     path.push(child.name)
     consumed.push(word.index)
-    position++
   }
   return { kind: 'node', node, path, rest: without(args, consumed) }
 }

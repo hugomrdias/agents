@@ -11,7 +11,7 @@ import {
 } from './define.ts'
 import type { ErrorRegistry } from './errors.ts'
 import { fromJsonSchema } from './json-schema.ts'
-import { closest, route, unknownCommand } from './route.ts'
+import { closest, findNode, unknownCommand } from './route.ts'
 import {
   type CommandSpec,
   JSON_SCHEMA_TARGET,
@@ -140,14 +140,12 @@ export function listSchema(
     commands: leaves(node, path).map(({ path: leafPath, command }) =>
       summary(leafPath, command)
     ),
-    ...(cli.aliases && path.length === 0 ? { aliases: cli.aliases } : {}),
     result: RESULT_SCHEMA,
   }
 }
 
 /** Builds the `schema <command>` data: JSON Schemas, error codes, and behavior of one command. */
 export function commandSchema(
-  cli: CliOptions,
   spec: CommandSpec,
   registry: Readonly<ErrorRegistry>
 ): Record<string, unknown> {
@@ -178,9 +176,6 @@ export function commandSchema(
     input: redactSecrets(spec),
     output: spec.outputJsonSchema ?? null,
     errors: describeErrors(registry, spec.errors),
-    aliases: Object.entries(cli.aliases ?? {})
-      .filter(([, target]) => target === spec.path)
-      .map(([alias]) => alias),
   }
 }
 
@@ -248,29 +243,23 @@ export function schemaCommand(
     handler: async () => ({ default: handler }),
   })
   const handler = defineHandler(command, ({ input, ok }) => {
-    const words = input.command ?? []
-    // Route like a command line, so an alias resolves to its canonical path.
-    const routed = route(root, words, cli.aliases)
-    const node =
-      routed.kind === 'node' && routed.rest.length === 0
-        ? routed.node
-        : undefined
+    const path = input.command ?? []
+    const node = findNode(root, path)
     if (!node) {
       throw unknownCommand(cli, {
         kind: 'unknown',
         group: root,
         path: [],
-        word: words.join(' '),
+        word: path.join(' '),
         suggestion: closest(
-          words.join(' '),
+          path.join(' '),
           leaves(root).map((leaf) => leaf.path)
         ),
       })
     }
-    const path = routed.kind === 'node' ? routed.path : words
     return ok(
       node.kind === 'command'
-        ? commandSchema(cli, resolveSpec(node, path.join(' ')), errors)
+        ? commandSchema(resolveSpec(node, path.join(' ')), errors)
         : listSchema(cli, node, path)
     )
   })

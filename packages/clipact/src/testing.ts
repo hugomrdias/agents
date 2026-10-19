@@ -309,7 +309,7 @@ export function schemas(cli: Cli): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
     leaves(cli.root).map(({ path, command }) => [
       path,
-      commandSchema(cli.options, resolveSpec(command, path), cli.errors),
+      commandSchema(resolveSpec(command, path), cli.errors),
     ])
   )
 }

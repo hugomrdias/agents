@@ -247,9 +247,9 @@ class Invocation {
     const { cli, root, args, flags, mode } = this.#state
     try {
       if (args[0] === COMPLETE_COMMAND) {
-        return await this.#text(complete(cli, root, args.slice(1)))
+        return await this.#text(complete(root, args.slice(1)))
       }
-      const routed = route(root, args, cli.aliases)
+      const routed = route(root, args)
       if (flags.version) {
         return await this.#text(`${cli.version}\n`)
       }
