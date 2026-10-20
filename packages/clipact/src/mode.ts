@@ -14,12 +14,21 @@ export function resolveEnvPrefix(
   return (cli.envPrefix ?? cli.name).toUpperCase().replace(/[^A-Z0-9]+/g, '_')
 }
 
-/** Names of the framework variables for a prefix, such as `ACME_OUTPUT`. */
+/**
+ * Names of the framework variables for a prefix, such as `ACME_OUTPUT`.
+ * `<PREFIX>_TELEMETRY` is reserved even without a `telemetry` option,
+ * because `ctx.telemetry()` reads its opt-out.
+ */
 export function frameworkVariables(prefix: string): {
   output: string
   agent: string
+  telemetry: string
 } {
-  return { output: `${prefix}_OUTPUT`, agent: `${prefix}_AGENT` }
+  return {
+    output: `${prefix}_OUTPUT`,
+    agent: `${prefix}_AGENT`,
+    telemetry: `${prefix}_TELEMETRY`,
+  }
 }
 
 /** Returns `true` for a supported output format. */

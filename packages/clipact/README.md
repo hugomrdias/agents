@@ -294,7 +294,7 @@ clipact handles globals this way:
 - `globals.get(ctx)` returns the typed values. It throws a `TypeError` for the context of a CLI defined without these globals.
 - Fields listed in `secrets` show `<redacted>` in `--debug` output, and `schema` leaves out their defaults and examples.
 - Root help lists them under **Environment**, before the framework variables. `schema --list` publishes them under `globals`. `--debug` prints `debug: globals` with the source of each value.
-- `defineCli` throws a `TypeError` when a global uses `<PREFIX>_OUTPUT` or `<PREFIX>_AGENT`. `assertDefinitions` also reports a variable that a command's `env` uses too.
+- `defineCli` throws a `TypeError` when a global uses `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, or `<PREFIX>_TELEMETRY`. `assertDefinitions` also reports a variable that a command's `env` uses too.
 
 When a setting also needs a flag, declare it as an input field of each command instead, with a shared schema fragment.
 
@@ -388,9 +388,9 @@ clipact registers its signal listeners with `process.once`, so a second signal e
 | Command | Output |
 | --- | --- |
 | `acme --version` | The version, on stdout |
-| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions. Root help also has an **Environment** section: each [global](#globals), then `<PREFIX>_OUTPUT` and `<PREFIX>_AGENT`. |
+| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions. Root help also has an **Environment** section: each [global](#globals), then `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, and, with [telemetry](#telemetry), `<PREFIX>_TELEMETRY`. |
 | `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, and side effects. With globals, a line points to root help for them. |
-| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], env, globals, result }`. `env` is `{ output, agent }`, the framework variable names. `globals` is `{ env, secrets, input }`, as in `schema <command>`, and only appears when the CLI has globals. `env` and `globals` appear only for the root. `result` is the JSON Schema of the result envelope. |
+| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], env, globals, result }`. `env` is `{ output, agent, telemetry }`, the framework variable names. `globals` is `{ env, secrets, input }`, as in `schema <command>`, and only appears when the CLI has globals. `env` and `globals` appear only for the root. `result` is the JSON Schema of the result envelope. |
 | `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 

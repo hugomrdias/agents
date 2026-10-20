@@ -489,6 +489,18 @@ describe('telemetry commands', () => {
   })
 })
 
+describe('telemetry variable', () => {
+  test('root help lists <PREFIX>_TELEMETRY only with a telemetry option', async () => {
+    const help = await invoke(cli, ['--help'], { env, tty: true })
+    assert.match(
+      help.stdout,
+      / {2}ACME_TELEMETRY +Turn usage telemetry on or off/
+    )
+    const plain = await invoke(base, ['--help'], { env, tty: true })
+    assert.doesNotMatch(plain.stdout, /ACME_TELEMETRY/)
+  })
+})
+
 describe('ctx.telemetry()', () => {
   test('returns the status and does not count as the notice', async () => {
     const result = await invoke(cli, ['probe', '--json'], { env })

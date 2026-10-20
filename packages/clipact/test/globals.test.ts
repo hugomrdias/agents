@@ -219,6 +219,18 @@ describe('globals', () => {
       /Global variable ACME_OUTPUT clashes with a framework variable of "acme"/
     )
   })
+
+  test('defineCli rejects a global that uses <PREFIX>_TELEMETRY', () => {
+    const clash = defineGlobals({
+      input: z.object({ telemetry: z.string().optional() }),
+      env: { telemetry: 'ACME_TELEMETRY' },
+    })
+    assert.throws(
+      () =>
+        defineCli({ name: 'acme', version: '1', globals: clash, commands: [] }),
+      /Global variable ACME_TELEMETRY clashes with a framework variable/
+    )
+  })
 })
 
 describe('globals help and discovery', () => {
@@ -270,7 +282,11 @@ describe('globals help and discovery', () => {
       'globals',
       'result',
     ])
-    assert.deepEqual(data.env, { output: 'ACME_OUTPUT', agent: 'ACME_AGENT' })
+    assert.deepEqual(data.env, {
+      output: 'ACME_OUTPUT',
+      agent: 'ACME_AGENT',
+      telemetry: 'ACME_TELEMETRY',
+    })
     const block = data.globals as {
       env: Record<string, string>
       secrets: string[]
