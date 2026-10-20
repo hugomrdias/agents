@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { beforeEach, describe, test } from 'node:test'
+import * as z from 'zod'
 import type { Env } from '../src/agent.ts'
 import {
   type CliOptions,
@@ -14,11 +22,13 @@ import {
   type TelemetryEvent,
 } from '../src/index.ts'
 import { detectProvider } from '../src/provider.ts'
+import { resolveSpec } from '../src/spec.ts'
 import {
   flagNames,
   readState,
   resolveTelemetry,
   stateFile,
+  writeState,
 } from '../src/telemetry.run.ts'
 import { assertContract, assertDefinitions, invoke } from '../src/testing.ts'
 import { cli as base } from './fixtures/cli.ts'
@@ -37,11 +47,25 @@ const probe: Command<undefined, undefined> = defineCommand({
   }),
 })
 
+/** Reads the status, then saves `telemetry disable` while still running. */
+const racer: Command<undefined, undefined> = defineCommand({
+  name: 'racer',
+  description: 'Save a choice while the command runs',
+  handler: async () => ({
+    default: defineHandler(racer, async (ctx) => {
+      await ctx.telemetry()
+      await mkdir(dirname(file()), { recursive: true })
+      await writeFile(file(), JSON.stringify({ telemetry: 'disabled' }))
+      return ctx.ok()
+    }),
+  }),
+})
+
 /** The fixture CLI with telemetry and the probe command. */
 function withTelemetry(telemetry: CliOptions['telemetry'] = { sender }) {
   return defineCli({
     ...base.options,
-    commands: [...base.options.commands, probe],
+    commands: [...base.options.commands, probe, racer],
     telemetry,
   })
 }
@@ -209,6 +233,39 @@ describe('telemetry helpers', () => {
       'no-agent',
     ])
   })
+
+  test('flag names skip values that look like flags', () => {
+    const note = defineCommand({
+      name: 'note',
+      description: 'Note',
+      input: z.object({ message: z.string(), pin: z.boolean().optional() }),
+      handler: async () => ({ default: undefined }),
+    })
+    const spec = resolveSpec(note, 'note')
+    assert.deepEqual(flagNames(['note', '--message', '--json'], spec), [
+      'message',
+    ])
+    assert.deepEqual(
+      flagNames(['note', '--message=--debug', '--no-pin', '--json'], spec),
+      ['json', 'message', 'no-pin']
+    )
+  })
+
+  test('writeState removes its temporary file when the write fails', async () => {
+    const target = join(home, 'taken', 'state.json')
+    await mkdir(target, { recursive: true })
+    await assert.rejects(writeState(target, { notice: true }))
+    assert.deepEqual(await readdir(dirname(target)), ['state.json'])
+  })
+
+  test('defineCli rejects a relative sender path', () => {
+    assert.throws(
+      () => withTelemetry({ sender: './telemetry.js' }),
+      /Telemetry sender "\.\/telemetry\.js" must be a URL or an absolute path/
+    )
+    withTelemetry({ sender: join(home, 'telemetry.js') })
+    withTelemetry({ sender: sender.href })
+  })
 })
 
 describe('detectProvider', () => {
@@ -278,6 +335,15 @@ describe('telemetry events', () => {
     const state = JSON.parse(await readFile(file(), 'utf8'))
     assert.equal(state.notice, true)
     assert.equal(state.installId, first.telemetry[0]?.installId)
+  })
+
+  test('a choice saved while the command runs is kept', async () => {
+    const result = await invoke(cli, ['racer'], { env })
+    assert.equal(result.exitCode, 0)
+    const state = JSON.parse(await readFile(file(), 'utf8'))
+    assert.equal(state.telemetry, 'disabled')
+    assert.equal(state.notice, true)
+    assert.equal(state.installId, result.telemetry[0]?.installId)
   })
 
   test('the notice links the docs page', async () => {

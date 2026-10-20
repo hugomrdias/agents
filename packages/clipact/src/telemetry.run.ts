@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 import { type Env, identifyAgent, isSet } from './agent.ts'
 import {
   type CliOptions,
@@ -17,11 +18,7 @@ import { detectProvider } from './provider.ts'
 import { FRAMEWORK_FLAGS } from './route.ts'
 import type { Session } from './session.ts'
 import type { CommandSpec } from './spec.ts'
-import {
-  TELEMETRY_CONTEXT,
-  type TelemetryCommand,
-  type TelemetryContext,
-} from './telemetry.ts'
+import { type TelemetryCommand, telemetryContexts } from './telemetry.ts'
 
 /** The variable that carries the event to the sender process. */
 export const EVENT_VARIABLE = 'CLIPACT_TELEMETRY_EVENT'
@@ -98,14 +95,22 @@ export async function readState(file: string): Promise<State> {
   }
 }
 
-/** Writes the state file through a temporary file, creating its directory. */
+/**
+ * Writes the state file through a temporary file, creating its directory.
+ * Removes the temporary file when the write or the rename fails.
+ */
 export async function writeState(file: string, state: State): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const temporary = `${file}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
-    mode: 0o600,
-  })
-  await rename(temporary, file)
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+      mode: 0o600,
+    })
+    await rename(temporary, file)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  }
 }
 
 /**
@@ -179,39 +184,43 @@ export async function resolveTelemetry(
 
 /**
  * Returns the names of known flags typed before `--`, sorted and without
- * values. Unknown names are dropped, because a typo may hold a value.
+ * values. Tokens are read as the command parser reads them, so a value that
+ * looks like a flag, as in `--message --json`, is not a flag. Unknown names
+ * are dropped, because a typo may hold a value.
  */
 export function flagNames(
   args: string[],
   spec: CommandSpec | undefined
 ): string[] {
-  const known = new Set<string>()
-  const shorts = new Map<string, string>()
+  const options: Record<
+    string,
+    { type: 'string' | 'boolean'; short?: string }
+  > = {}
   for (const flag of FRAMEWORK_FLAGS) {
-    known.add(flag.name)
-    if (flag.negatable) {
-      known.add(`no-${flag.name}`)
-    }
-    if (flag.short) {
-      shorts.set(flag.short, flag.name)
+    options[flag.name] = {
+      type: flag.value ? 'string' : 'boolean',
+      ...(flag.short ? { short: flag.short } : {}),
     }
   }
   for (const field of spec?.fields ?? []) {
-    known.add(field.flag)
-    known.add(`no-${field.flag}`)
-  }
-  const names = new Set<string>()
-  for (const arg of args) {
-    if (arg === '--') {
-      break
+    options[field.flag] = {
+      type: field.kind === 'boolean' ? 'boolean' : 'string',
     }
-    const name = arg.startsWith('--')
-      ? arg.slice(2).split('=')[0]
-      : /^-[A-Za-z]$/.test(arg)
-        ? shorts.get(arg.slice(1))
-        : undefined
-    if (name && known.has(name)) {
-      names.add(name)
+  }
+  const { tokens } = parseArgs({
+    args,
+    options,
+    strict: false,
+    allowPositionals: true,
+    allowNegative: true,
+    tokens: true,
+  })
+  const names = new Set<string>()
+  for (const token of tokens) {
+    if (token.kind === 'option' && Object.hasOwn(options, token.name)) {
+      names.add(
+        token.rawName.startsWith('--no-') ? `no-${token.name}` : token.name
+      )
     }
   }
   return [...names].sort()
@@ -248,8 +257,9 @@ export async function report(input: ReportInput): Promise<void> {
   if (!resolved.log && isSet(env.CODEX_SANDBOX_NETWORK_DISABLED)) {
     return
   }
-  const installId = await persist(cli, resolved, session, isSet(env.CI))
-  const event = buildEvent(input, installId)
+  const ci = isSet(env.CI)
+  const installId = await persist(cli, resolved, session, ci)
+  const event = buildEvent(input, installId, ci)
   if (resolved.log || session.debug) {
     session.log(`${cli.name}: telemetry event ${JSON.stringify(event)}`)
   }
@@ -265,9 +275,10 @@ export async function report(input: ReportInput): Promise<void> {
 
 /**
  * Shows the first-run notice and creates the installation ID, saving both.
- * A saved `enable` or `disable` counts as having seen the notice. Returns
- * the installation ID, or `null` in CI, whose home directory rarely
- * survives the job, and when it cannot be saved.
+ * A saved `enable` or `disable` counts as having seen the notice. The file
+ * is read again before writing, so a choice saved while the command ran is
+ * kept. Returns the installation ID, or `null` in CI, whose home directory
+ * rarely survives the job, and when it cannot be saved.
  */
 async function persist(
   cli: CliOptions,
@@ -289,8 +300,15 @@ async function persist(
   }
   if (updates.notice || updates.installId) {
     try {
-      await writeState(file, { ...state, ...updates })
-      Object.assign(state, updates)
+      const current = await readState(file)
+      const installId = current.installId ?? updates.installId
+      const next: State = {
+        ...current,
+        ...(updates.notice ? { notice: true } : {}),
+        ...(installId ? { installId } : {}),
+      }
+      await writeState(file, next)
+      Object.assign(state, next)
     } catch (error) {
       if (session.debug) {
         session.log(
@@ -311,7 +329,8 @@ function notice(cli: CliOptions): string {
 /** Builds the event from names and outcomes only. */
 function buildEvent(
   input: ReportInput,
-  installId: string | null
+  installId: string | null,
+  ci: boolean
 ): TelemetryEvent {
   const { cli, env, mode } = input
   const agent = mode.agent || null
@@ -328,11 +347,7 @@ function buildEvent(
       node: process.versions.node,
       os: process.platform,
       arch: process.arch,
-      mode: isSet(env.CI)
-        ? 'ci'
-        : mode.interactive
-          ? 'interactive'
-          : 'noninteractive',
+      mode: ci ? 'ci' : mode.interactive ? 'interactive' : 'noninteractive',
       format: mode.format,
       provider: detectProvider(env) ?? null,
       agent,
@@ -410,13 +425,6 @@ async function send(
   }
 }
 
-/** Reads the invocation details that the framework puts on `ctx`. */
-function telemetryContext(ctx: object): TelemetryContext {
-  return (ctx as Record<symbol, TelemetryContext>)[
-    TELEMETRY_CONTEXT
-  ] as TelemetryContext
-}
-
 /** The `telemetry status` handler. */
 export function statusHandler(command: TelemetryCommand): Handler {
   return defineHandler(command, async (ctx) => ctx.ok(await ctx.telemetry()))
@@ -433,7 +441,11 @@ export function saveHandler(
   choice: 'enabled' | 'disabled'
 ): Handler {
   return defineHandler(command, async (ctx) => {
-    const { env, envPrefix } = telemetryContext(ctx)
+    const context = telemetryContexts.get(ctx)
+    if (!context) {
+      throw new TypeError('telemetry commands need a context from clipact')
+    }
+    const { env, envPrefix } = context
     const file = stateFile(cli.name, env)
     if (!file) {
       throw new CliError({

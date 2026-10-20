@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { COMPLETE_COMMAND, complete, completionCommand } from './completion.ts'
 import {
   type AnyCommand,
@@ -52,7 +53,7 @@ import {
 import { skillsGroup, skillsPath } from './skills.ts'
 import { type CommandSpec, type FieldSpec, resolveSpec } from './spec.ts'
 import type { ResolvedTelemetry } from './telemetry.run.ts'
-import { TELEMETRY_CONTEXT, telemetryGroup } from './telemetry.ts'
+import { telemetryContexts, telemetryGroup } from './telemetry.ts'
 
 /** Signals that cancel the running command. */
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
@@ -148,6 +149,17 @@ export function defineCli(definition: CliOptions): Cli {
         )
       }
     }
+  }
+  // A relative path would resolve against the user's working directory.
+  const sender = options.telemetry?.sender
+  if (
+    typeof sender === 'string' &&
+    !sender.startsWith('file:') &&
+    !isAbsolute(sender)
+  ) {
+    throw new TypeError(
+      `Telemetry sender "${sender}" must be a URL or an absolute path, such as new URL('./telemetry.js', import.meta.url)`
+    )
   }
 
   const execute = async (
@@ -470,8 +482,9 @@ class Invocation {
       ok: (data, options) => createOk(data ?? {}, options?.next),
       telemetry: async () => ({ ...(await this.#resolveTelemetry()).status }),
     }
-    Object.defineProperty(context, TELEMETRY_CONTEXT, {
-      value: { env: io.env, envPrefix: this.#state.envPrefix },
+    telemetryContexts.set(context, {
+      env: io.env,
+      envPrefix: this.#state.envPrefix,
     })
     if (cli.globals && globals) {
       bindGlobals(context, cli.globals, globals.value)

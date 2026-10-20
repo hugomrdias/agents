@@ -179,7 +179,7 @@ clipact picks the format from the first of these that applies:
 3. A detected agent selects `json`.
 4. A stdout that is not a TTY selects `json`. Otherwise, the format is `human`.
 
-clipact detects an agent from `AI_AGENT` and `AGENT` first. Their value is the agent name, and `1` or `true` gives the name `unknown`. A value of the form `<name>_<version>_agent`, such as Claude Code's `claude-code_2-1-299_agent`, gives the name `claude-code`. It then checks these vendor variables: `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CODEX_THREAD_ID`, `CODEX_CI`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `COPILOT_AGENT_SESSION_ID`, `AMP_CURRENT_THREAD_ID`, and `QWEN_CODE_SESSION_ID`. `--agent`, `--no-agent`, and `<PREFIX>_AGENT=1|0|true|false` override detection. `CI` and `TERM` do not signal an agent.
+clipact detects an agent from `AI_AGENT` and `AGENT` first. Their value is the agent name, and `1` or `true` gives the name `unknown`. A value of the form `<name>_<version>_agent`, such as Claude Code's `claude-code_2-1-299_agent`, gives the name `claude-code`; the version must start with a digit, so `my_custom_agent` stays one name. It then checks these vendor variables: `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CODEX_THREAD_ID`, `CODEX_CI`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `COPILOT_AGENT_SESSION_ID`, `AMP_CURRENT_THREAD_ID`, and `QWEN_CODE_SESSION_ID`. `--agent`, `--no-agent`, and `<PREFIX>_AGENT=1|0|true|false` override detection. `CI` and `TERM` do not signal an agent.
 
 Detection changes presentation only:
 
@@ -512,7 +512,7 @@ const send: TelemetrySender = async (event, { signal }) => {
 export default send
 ```
 
-After the result is written, clipact starts a detached, unref'd Node.js process that imports the sender module and calls its default export with the event. The command never waits for it, and its errors never reach the user. The sender's `signal` aborts after 10 seconds, and the process then exits. The module must exist as a file at run time, so when you bundle the CLI, make the sender its own entry point. The application owns the endpoint and the request format.
+After the result is written, clipact starts a detached, unref'd Node.js process that imports the sender module and calls its default export with the event. The command never waits for it, and its errors never reach the user. The sender's `signal` aborts after 10 seconds, and the process then exits. The module must exist as a file at run time, so when you bundle the CLI, make the sender its own entry point. A string `sender` must be a `file:` URL or an absolute path; `defineCli` throws for a relative path, which would resolve against the user's working directory. The application owns the endpoint and the request format.
 
 Telemetry is on by default. The first run that sends an event prints one line to stderr, in every mode, and the event is sent in that same run. A saved `telemetry enable` counts as having seen it:
 
@@ -545,7 +545,7 @@ Each event is a `TelemetryEvent`:
 | `eventVersion` | `1` |
 | `cli.name`, `cli.version` | The CLI's `name` and `version` |
 | `command` | The routed path, such as `artifacts put`. For an unknown command, the path of its group. |
-| `flags` | Sorted names of known flags typed before `--`, such as `["dry-run", "json"]`. Values, positionals, and unknown names are never recorded. |
+| `flags` | Sorted names of known flags typed before `--`, such as `["dry-run", "json"]`. Arguments are read as the command parser reads them, so in `--message --json`, `--json` is a value. Values, positionals, and unknown names are never recorded. |
 | `errorCode` | The error code of a failed command, or `null` on success |
 | `durationMs`, `timestamp` | Time until the result was written, and when it was written as an ISO 8601 string |
 | `env.node`, `env.os`, `env.arch` | `process.versions.node`, `process.platform`, `process.arch` |

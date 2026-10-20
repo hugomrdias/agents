@@ -11,10 +11,12 @@ import {
 import { fromJsonSchema } from './json-schema.ts'
 
 /**
- * Key of the invocation details that the framework's `telemetry` handlers
- * read from `ctx`; handlers otherwise never see the environment.
+ * The invocation details that the framework's `telemetry` handlers need, by
+ * handler context. Handlers otherwise never see the environment, and the map
+ * is not exported from the package.
  */
-export const TELEMETRY_CONTEXT = Symbol('clipact.telemetry')
+export const telemetryContexts: WeakMap<object, TelemetryContext> =
+  new WeakMap()
 
 /** What the `telemetry` handlers need from the invocation. */
 export interface TelemetryContext {
@@ -22,34 +24,40 @@ export interface TelemetryContext {
   envPrefix: string
 }
 
-const statusOutput = fromJsonSchema<TelemetryStatus>({
-  type: 'object',
-  properties: {
-    enabled: {
-      type: 'boolean',
-      description: 'The CLI sends usage events',
+/** Builds the output schema of the `telemetry` commands. */
+function statusSchema() {
+  return fromJsonSchema<TelemetryStatus>({
+    type: 'object',
+    properties: {
+      enabled: {
+        type: 'boolean',
+        description: 'The CLI sends usage events',
+      },
+      optedOut: {
+        type: 'boolean',
+        description:
+          'DO_NOT_TRACK, <PREFIX>_TELEMETRY=0, or telemetry disable turned telemetry off',
+      },
+      source: {
+        type: 'string',
+        enum: ['env', 'config', 'default', 'unconfigured'],
+        description: 'What decided enabled',
+      },
+      variable: {
+        type: 'string',
+        description: 'The environment variable behind the answer',
+      },
     },
-    optedOut: {
-      type: 'boolean',
-      description:
-        'DO_NOT_TRACK, <PREFIX>_TELEMETRY=0, or telemetry disable turned telemetry off',
-    },
-    source: {
-      type: 'string',
-      enum: ['env', 'config', 'default', 'unconfigured'],
-      description: 'What decided enabled',
-    },
-    variable: {
-      type: 'string',
-      description: 'The environment variable behind the answer',
-    },
-  },
-  required: ['enabled', 'optedOut', 'source'],
-  additionalProperties: false,
-})
+    required: ['enabled', 'optedOut', 'source'],
+    additionalProperties: false,
+  })
+}
 
 /** A `telemetry` command: no input, the status as output. */
-export type TelemetryCommand = Command<undefined, typeof statusOutput>
+export type TelemetryCommand = Command<
+  undefined,
+  ReturnType<typeof statusSchema>
+>
 
 /** Describes a status for humans, such as `Telemetry is off (DO_NOT_TRACK).` */
 function describeStatus(status: TelemetryStatus): string {
@@ -71,6 +79,7 @@ function lazy(create: (run: typeof import('./telemetry.run.ts')) => Handler) {
  * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#opting-out
  */
 export function telemetryGroup(cli: CliOptions): Group {
+  const statusOutput = statusSchema()
   const status: TelemetryCommand = defineCommand({
     name: 'status',
     description: 'Report whether telemetry is on and what decided it',

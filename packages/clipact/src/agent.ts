@@ -43,7 +43,8 @@ export interface DetectedAgent {
 /**
  * Detects a coding agent like {@link detectAgent}, and splits an `AI_AGENT`
  * or `AGENT` value of the form `<name>_<version>_agent`, such as Claude
- * Code's `claude-code_2-1-299_agent`, into the name and the version.
+ * Code's `claude-code_2-1-299_agent`, into the name and the version. The
+ * version starts with a digit, so `my_custom_agent` stays one name.
  *
  * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#agent-detection-and-help
  */
@@ -54,7 +55,7 @@ export function identifyAgent(env: Env): DetectedAgent | undefined {
       if (value === '1' || value === 'true') {
         return { agent: 'unknown' }
       }
-      const match = /^(.+?)_([^_]+)_agent$/.exec(value)
+      const match = /^(.+?)_(\d[^_]*)_agent$/.exec(value)
       return match
         ? { agent: match[1] as string, version: match[2] as string }
         : { agent: value }

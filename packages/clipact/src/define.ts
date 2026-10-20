@@ -264,8 +264,9 @@ export type TelemetrySender = (
 export interface TelemetryOptions {
   /**
    * The module that default-exports a {@link TelemetrySender}, such as
-   * `new URL('./telemetry.js', import.meta.url)`. It must exist as a file at
-   * run time, so make it its own entry point when bundling.
+   * `new URL('./telemetry.js', import.meta.url)`. A string must be a `file:`
+   * URL or an absolute path. It must exist as a file at run time, so make it
+   * its own entry point when bundling.
    */
   sender: URL | string
   /** Whether telemetry is on before the user chooses; defaults to `on`. */

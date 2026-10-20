@@ -51,6 +51,9 @@ describe('identifyAgent', () => {
     assert.deepEqual(identifyAgent({ AI_AGENT: 'my_tool' }), {
       agent: 'my_tool',
     })
+    assert.deepEqual(identifyAgent({ AI_AGENT: 'my_custom_agent' }), {
+      agent: 'my_custom_agent',
+    })
     assert.deepEqual(identifyAgent({ GEMINI_CLI: '1' }), {
       agent: 'gemini-cli',
     })
