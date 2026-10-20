@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/hugomrdias/agents/compare/clipact-v0.6.0...clipact-v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **clipact:** add ctx.storage() to report where the CLI's folder came from ([#12](https://github.com/hugomrdias/agents/issues/12)) ([c3104b6](https://github.com/hugomrdias/agents/commit/c3104b6fb694b5cbb6193741e874da1429474a87))
+
 ## [0.6.0](https://github.com/hugomrdias/agents/compare/clipact-v0.5.0...clipact-v0.6.0) (2026-10-20)
 
 
