@@ -1,6 +1,6 @@
 {
   "name": "clipact",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Small framework for Node.js CLIs that agents and humans can both rely on",
   "license": "MIT",
   "author": "Hugo Dias <hugomrdias@gmail.com>",

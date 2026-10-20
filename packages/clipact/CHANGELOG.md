@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/hugomrdias/agents/compare/clipact-v0.5.0...clipact-v0.6.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **clipact:** the old state.json is ignored, so users see the telemetry notice once more and get a new installation ID. defineCli rejects a global named <PREFIX>_CONFIG_DIR, and apps can no longer define their own state_unwritable or config_invalid codes.
+
+### Features
+
+* **clipact:** add a per-CLI folder, ctx.dir(), and defineStore ([#10](https://github.com/hugomrdias/agents/issues/10)) ([1efb537](https://github.com/hugomrdias/agents/commit/1efb537976a4918779d12f3f2a97f45f140227f1))
+
 ## [0.5.0](https://github.com/hugomrdias/agents/compare/clipact-v0.4.0...clipact-v0.5.0) (2026-10-20)
 
 
