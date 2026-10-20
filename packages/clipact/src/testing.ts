@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import type { Env } from './agent.ts'
 import type { Cli, Outcome } from './cli.ts'
-import { leaves } from './define.ts'
+import { leaves, type TelemetryEvent } from './define.ts'
 import { commandSchema } from './discovery.ts'
 import type { OutputStream } from './io.ts'
 import { JSON_SCHEMA_TARGET, resolveSpec } from './spec.ts'
@@ -61,12 +61,13 @@ function parseJson(stdout: string): Record<string, unknown> | undefined {
 
 /**
  * Runs a CLI in process with captured streams and strict contract checks.
+ * Telemetry events are collected in `telemetry` instead of being sent.
  */
 export async function invoke(
   cli: Cli,
   args: string[],
   options: InvokeOptions = {}
-): Promise<RunResult & { outcome: Outcome }> {
+): Promise<RunResult & { outcome: Outcome; telemetry: TelemetryEvent[] }> {
   const tty = options.tty === true
   const stdout = new Capture(tty)
   const stderr = new Capture(tty)
@@ -76,10 +77,15 @@ export async function invoke(
       : Readable.from(options.stdin === undefined ? [] : [options.stdin]),
     { isTTY: tty }
   )
+  const telemetry: TelemetryEvent[] = []
   const outcome = await cli.execute(
     args,
     { env: options.env ?? {}, stdin, stdout, stderr },
-    { signal: options.signal, strict: options.strict ?? true }
+    {
+      signal: options.signal,
+      strict: options.strict ?? true,
+      telemetry: (event) => telemetry.push(event),
+    }
   )
   return {
     exitCode: outcome.signal ? null : outcome.exitCode,
@@ -88,12 +94,13 @@ export async function invoke(
     stderr: stderr.text,
     json: parseJson(stdout.text),
     outcome,
+    telemetry,
   }
 }
 
 /** Options for {@link exec}. */
 export interface ExecOptions {
-  /** Added to a minimal environment containing only `PATH`. */
+  /** Added to a minimal environment containing only `PATH` and `DO_NOT_TRACK=1`. */
   env?: Env
   stdin?: string
   /** Sends this signal once stderr contains `when`, or after `afterMs`. */
@@ -105,6 +112,7 @@ export interface ExecOptions {
 
 /**
  * Spawns a CLI entry file with Node, without a TTY, and captures its output.
+ * `DO_NOT_TRACK=1` keeps tests from sending telemetry; override it in `env`.
  */
 export function exec(
   bin: string,
@@ -113,7 +121,7 @@ export function exec(
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [bin, ...args], {
-      env: { PATH: process.env.PATH, ...options.env },
+      env: { PATH: process.env.PATH, DO_NOT_TRACK: '1', ...options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: options.timeoutMs ?? 10_000,
     })

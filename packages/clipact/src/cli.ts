@@ -12,6 +12,7 @@ import {
   type Mode,
   printsPlainText,
   type Schema,
+  type TelemetryEvent,
 } from './define.ts'
 import { schemaCommand } from './discovery.ts'
 import {
@@ -43,6 +44,8 @@ import {
 } from './session.ts'
 import { skillsGroup, skillsPath } from './skills.ts'
 import { type CommandSpec, resolveSpec } from './spec.ts'
+import type { ResolvedTelemetry } from './telemetry.run.ts'
+import { TELEMETRY_CONTEXT, telemetryGroup } from './telemetry.ts'
 
 /** Signals that cancel the running command. */
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
@@ -71,6 +74,8 @@ export interface ExecuteOptions {
   crash?: Promise<never>
   /** Checks results against output schemas, declared error codes, and `details` schemas. */
   strict?: boolean
+  /** Receives each telemetry event instead of the sender, such as in tests. */
+  telemetry?: (event: TelemetryEvent) => void
 }
 
 /** A CLI created by {@link defineCli}. */
@@ -98,7 +103,14 @@ export function defineCli(definition: CliOptions): Cli {
     definition.commands.some((node) => node.name === name)
   // An application's own `skills` command replaces the framework's.
   const skills = defines('skills') ? undefined : definition.skills
-  const errors = errorRegistry(definition.errors, Boolean(skills))
+  // An application's own `telemetry` command replaces the framework's, and events are still sent.
+  const telemetryCommands =
+    Boolean(definition.telemetry) && !defines('telemetry')
+  const errors = errorRegistry(
+    definition.errors,
+    Boolean(skills),
+    telemetryCommands
+  )
   const commands = [...definition.commands]
   const options: CliOptions = { ...definition, commands }
   const root: Group = {
@@ -109,6 +121,9 @@ export function defineCli(definition: CliOptions): Cli {
   }
   if (skills) {
     commands.push(skillsGroup(definition, skills))
+  }
+  if (telemetryCommands) {
+    commands.push(telemetryGroup(definition))
   }
   if (!defines('schema')) {
     commands.push(schemaCommand(options, root, errors))
@@ -125,6 +140,7 @@ export function defineCli(definition: CliOptions): Cli {
     io: Io,
     executeOptions: ExecuteOptions = {}
   ): Promise<Outcome> => {
+    const started = performance.now()
     const controller = new AbortController()
     const signal = executeOptions.signal
       ? AbortSignal.any([controller.signal, executeOptions.signal])
@@ -145,18 +161,23 @@ export function defineCli(definition: CliOptions): Cli {
       signal,
       strict: executeOptions.strict === true,
       errors,
+      envPrefix,
+      telemetryCommands,
+      started,
     })
     const work = invocation.run()
+    let outcome: Outcome
     try {
-      return await (executeOptions.crash
+      outcome = await (executeOptions.crash
         ? Promise.race([work, executeOptions.crash])
         : work)
     } catch (error) {
-      const outcome = await invocation.fail(error)
+      outcome = await invocation.fail(error)
       // Stop handler I/O that would otherwise keep the process alive.
       controller.abort(error)
-      return outcome
     }
+    await invocation.report(outcome, executeOptions.telemetry)
+    return outcome
   }
 
   return {
@@ -227,6 +248,12 @@ interface InvocationState {
   strict: boolean
   /** The full error registry, built-in codes included. */
   errors: Readonly<ErrorRegistry>
+  /** Framework variable prefix, such as `ACME`. */
+  envPrefix: string
+  /** The framework's `telemetry` commands are installed. */
+  telemetryCommands: boolean
+  /** `performance.now()` when the invocation started. */
+  started: number
 }
 
 /** Runs the execution pipeline for one argv. */
@@ -234,6 +261,10 @@ class Invocation {
   readonly #state: InvocationState
   #spec: CommandSpec | undefined
   #checkpoint: Checkpoint | undefined
+  /** The routed command or group path; unset for shell completion. */
+  #path: string[] | undefined
+  /** Telemetry status, resolved on first use. */
+  #telemetry: Promise<ResolvedTelemetry> | undefined
   /** The group a routing error happened in, and whether its command was missing. */
   #routing: { group: Group; path: string[]; missing: boolean } | undefined
 
@@ -250,6 +281,7 @@ class Invocation {
         return await this.#text(complete(root, args.slice(1)))
       }
       const routed = route(root, args)
+      this.#path = routed.path
       if (flags.version) {
         return await this.#text(`${cli.version}\n`)
       }
@@ -393,7 +425,11 @@ class Invocation {
         )
       },
       ok: (data, options) => createOk(data ?? {}, options?.next),
+      telemetry: async () => ({ ...(await this.#resolveTelemetry()).status }),
     }
+    Object.defineProperty(context, TELEMETRY_CONTEXT, {
+      value: { env: io.env, envPrefix: this.#state.envPrefix },
+    })
     const value = await handler.run(context)
     if (!isOk(value)) {
       throw new DefinitionError(
@@ -427,6 +463,62 @@ class Invocation {
     return await this.#finish(checked, {
       human: succeeded ? human(data) : undefined,
     })
+  }
+
+  /**
+   * After the result, reports the invocation when the CLI has telemetry.
+   * Skips shell completion, the `telemetry` commands, and interruptions,
+   * and never changes the outcome.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#sending
+   */
+  async report(
+    outcome: Outcome,
+    hook: ((event: TelemetryEvent) => void) | undefined
+  ): Promise<void> {
+    const { cli, args, io, mode, session, telemetryCommands, started } =
+      this.#state
+    const path = this.#path
+    if (
+      !cli.telemetry ||
+      outcome.signal ||
+      path === undefined ||
+      (telemetryCommands && path[0] === 'telemetry')
+    ) {
+      return
+    }
+    const durationMs = Math.round(performance.now() - started)
+    try {
+      const run = await import('./telemetry.run.ts')
+      const result = outcome.result
+      await run.report({
+        cli,
+        env: io.env,
+        mode,
+        session,
+        resolved: await this.#resolveTelemetry(),
+        command: path.join(' '),
+        flags: run.flagNames(args, this.#spec),
+        errorCode: result && isErrorResult(result) ? result.error.code : null,
+        durationMs,
+        hook,
+      })
+    } catch (error) {
+      if (session.debug) {
+        session.log(
+          `debug: telemetry failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    }
+  }
+
+  /** Resolves the telemetry status once per invocation, loading its module on first use. */
+  #resolveTelemetry(): Promise<ResolvedTelemetry> {
+    const { cli, envPrefix, io } = this.#state
+    this.#telemetry ??= import('./telemetry.run.ts').then((run) =>
+      run.resolveTelemetry(cli, envPrefix, io.env)
+    )
+    return this.#telemetry
   }
 
   /** After a human-mode command, suggests updating project skills installed by another version. */

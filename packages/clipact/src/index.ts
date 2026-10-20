@@ -26,6 +26,11 @@ export {
   type ParsedOf,
   type ProgressEvent,
   type Schema,
+  type TelemetryEnv,
+  type TelemetryEvent,
+  type TelemetryOptions,
+  type TelemetrySender,
+  type TelemetryStatus,
 } from './define.ts'
 export {
   BUILTIN_ERROR_CODES,

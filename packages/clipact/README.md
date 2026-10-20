@@ -27,6 +27,7 @@ The [launchpad example](../../examples/launchpad/README.md) is a complete CLI th
   - [Help and discovery](#help-and-discovery)
   - [Shell completions](#shell-completions)
   - [Agent skills](#agent-skills)
+  - [Telemetry](#telemetry)
   - [Built-in flags and variables](#built-in-flags-and-variables)
 - [API reference](#api-reference)
 - [Testing API](#testing-api)
@@ -177,7 +178,7 @@ clipact picks the format from the first of these that applies:
 3. A detected agent selects `json`.
 4. A stdout that is not a TTY selects `json`. Otherwise, the format is `human`.
 
-clipact detects an agent from `AI_AGENT` and `AGENT` first. Their value is the agent name, and `1` or `true` gives the name `unknown`. It then checks these vendor variables: `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CODEX_THREAD_ID`, `CODEX_CI`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `COPILOT_AGENT_SESSION_ID`, `AMP_CURRENT_THREAD_ID`, and `QWEN_CODE_SESSION_ID`. `--agent`, `--no-agent`, and `<PREFIX>_AGENT=1|0|true|false` override detection. `CI` and `TERM` do not signal an agent.
+clipact detects an agent from `AI_AGENT` and `AGENT` first. Their value is the agent name, and `1` or `true` gives the name `unknown`. A value of the form `<name>_<version>_agent`, such as Claude Code's `claude-code_2-1-299_agent`, gives the name `claude-code`. It then checks these vendor variables: `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CODEX_THREAD_ID`, `CODEX_CI`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `COPILOT_AGENT_SESSION_ID`, `AMP_CURRENT_THREAD_ID`, and `QWEN_CODE_SESSION_ID`. `--agent`, `--no-agent`, and `<PREFIX>_AGENT=1|0|true|false` override detection. `CI` and `TERM` do not signal an agent.
 
 Detection changes presentation only:
 
@@ -310,6 +311,7 @@ Throw a `CliError` for an expected failure. In strict mode, clipact checks that 
 | `internal_error` | Anything unexpected | `false` |
 | `rate_limited`, `service_unavailable`, `timeout` | Handlers | Default `true` only for `readOnly` or `idempotent` commands |
 | `skill_conflict` | `skills install`, when `skills` is configured (see [Agent skills](#agent-skills)) | `false` |
+| `state_unwritable` | `telemetry enable` and `telemetry disable`, when `telemetry` is configured (see [Telemetry](#telemetry)) | `false` |
 | Your codes | Handlers | Default `false` |
 
 An explicit `retryable` always wins. clipact never retries. Handlers and SDKs own request-level retries and backoff, and a handler sets `retryable: true` only when the same command is safe to run again.
@@ -458,6 +460,73 @@ acme: the installed "acme" skill is from version 0.9.0; run "acme skills install
 
 If the root defines its own `skills` command or group, clipact does not add the built-in one.
 
+### Telemetry
+
+To collect usage events, point `telemetry.sender` at a module that sends them:
+
+```ts
+defineCli({ name: 'acme', version: '1.0.0', commands, telemetry: { sender: new URL('./telemetry.js', import.meta.url) } })
+```
+
+```ts
+// telemetry.ts
+import type { TelemetrySender } from 'clipact'
+
+const send: TelemetrySender = async (event, { signal }) => {
+  await fetch('https://telemetry.example.com/events', { method: 'POST', body: JSON.stringify(event), signal })
+}
+export default send
+```
+
+After the result is written, clipact starts a detached, unref'd Node.js process that imports the sender module and calls its default export with the event. The command never waits for it, and its errors never reach the user. The sender's `signal` aborts after 10 seconds, and the process then exits. The module must exist as a file at run time, so when you bundle the CLI, make the sender its own entry point. The application owns the endpoint and the request format.
+
+Telemetry is on by default. The first run that sends an event prints one line to stderr, in every mode, and the event is sent in that same run. A saved `telemetry enable` counts as having seen it:
+
+```text
+acme: this CLI sends usage data (command and flag names, error codes, versions; never values). Turn it off with "acme telemetry disable" or DO_NOT_TRACK=1.
+```
+
+Set `default: 'off'` to make telemetry opt-in, and `docs` to a page that lists the fields, which the notice links. Any opt-out wins:
+
+1. `DO_NOT_TRACK` set to anything other than empty, `0`, or `false`
+2. `<PREFIX>_TELEMETRY=0` or `false`
+3. `acme telemetry disable`
+
+Then `<PREFIX>_TELEMETRY=1`, `true`, or `log` and `acme telemetry enable` turn telemetry on, and `default` decides the rest. `<PREFIX>_TELEMETRY=log` prints each event to stderr instead of sending it. `--debug` prints each event, waits for the sender, and prints its errors. clipact sends nothing when `CODEX_SANDBOX_NETWORK_DISABLED` is set, on an interruption, for shell completion, or for the `telemetry` commands themselves.
+
+The configured CLI gets a `telemetry` group:
+
+| Command | Behavior |
+| --- | --- |
+| `acme telemetry status` | Reports `{ enabled, optedOut, source, variable? }`. `source` is `env`, `config`, or `default`, and `variable` names the environment variable behind the answer. |
+| `acme telemetry enable` | Saves the choice to send events and reports the resulting status, which an environment opt-out may still override. Idempotent. |
+| `acme telemetry disable` | Saves the choice to send nothing. Idempotent. |
+
+`enable` and `disable` return `state_unwritable` when the state file cannot be written. The state file is `state.json` in a directory named after the CLI: `$XDG_STATE_HOME/acme` (default `~/.local/state/acme`) on Linux, `~/Library/Application Support/acme` on macOS, and `%LOCALAPPDATA%\acme` on Windows. It holds the saved choice, whether the notice was shown, and the installation ID. When the file cannot be read or written, as in sandboxes, clipact treats it as empty, shows the notice again, and sends `installId: null`.
+
+Each event is a `TelemetryEvent`:
+
+| Field | Value |
+| --- | --- |
+| `eventVersion` | `1` |
+| `cli.name`, `cli.version` | The CLI's `name` and `version` |
+| `command` | The routed path, such as `artifacts put`. For an unknown command, the path of its group. |
+| `flags` | Sorted names of known flags typed before `--`, such as `["dry-run", "json"]`. Values, positionals, and unknown names are never recorded. |
+| `errorCode` | The error code of a failed command, or `null` on success |
+| `durationMs`, `timestamp` | Time until the result was written, and when it was written as an ISO 8601 string |
+| `env.node`, `env.os`, `env.arch` | `process.versions.node`, `process.platform`, `process.arch` |
+| `env.mode` | `ci` when `CI` is set, otherwise `interactive` or `noninteractive` |
+| `env.provider` | The CI or deployment provider, such as `github_actions`, `gitlab`, or `vercel`, from a table copied from [std-env](https://github.com/unjs/std-env/blob/v4.3.0/src/providers.ts). `null` when none is detected. |
+| `env.format` | `json` or `human` |
+| `env.agent`, `env.agentVersion` | The detected or forced agent, and its version when `AI_AGENT` or `AGENT` carries one, such as `2-1-299` |
+| `installId` | A random UUID saved in the state file. `null` in CI, whose home directory rarely outlives the job, and when it cannot be saved. |
+
+Events carry no agent session ID or hash, so they cannot be linked into one agent session's sequence of calls.
+
+A handler can read the same status with `await ctx.telemetry()`. Check `optedOut` before the application's own reporting, such as an agent header on API requests. Never change a command's output or behavior based on it. It works without a `telemetry` option too: `enabled` is then `false` with source `unconfigured`, and `optedOut` reads only `DO_NOT_TRACK` and `<PREFIX>_TELEMETRY`.
+
+If the root defines its own `telemetry` command or group, clipact does not add the built-in one and still sends events.
+
 ### Built-in flags and variables
 
 | Flag | Where | Effect |
@@ -480,6 +549,9 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | `<PREFIX>_AGENT` | `1`, `0`, `true`, `false` | Force or disable agent mode |
 | `AI_AGENT`, `AGENT`, vendor variables | Any | Agent detection |
 | `CI` | Set, non-empty, and not `0` or `false` | No prompts |
+| `DO_NOT_TRACK` | Set, non-empty, and not `0` or `false` | Turn telemetry off |
+| `<PREFIX>_TELEMETRY` | `1`, `0`, `true`, `false`, `log` | Turn telemetry on or off, or print events instead of sending them |
+| `CODEX_SANDBOX_NETWORK_DISABLED` | Set, non-empty, and not `0` or `false` | Send no telemetry |
 | `NO_COLOR`, `FORCE_COLOR`, `TERM` | Standard | Color in human mode |
 
 `<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`.
@@ -502,6 +574,7 @@ Creates a CLI from its command tree.
 | `skills` | `URL \| string`? | Directory of bundled skills (`<name>/SKILL.md`). Adds the [`skills` commands](#agent-skills). |
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
 | `errors` | `ErrorRegistry?` | Every error code the commands return besides the built-in codes, as `{ [code]: { description, details? } }`, where `details` is a `Schema`. See [Errors](#errors). |
+| `telemetry` | `{ sender: URL \| string, default?: 'on' \| 'off', docs?: string }`? | Sends usage events through the `sender` module and adds the [`telemetry` commands](#telemetry). |
 
 The returned `Cli` has these members:
 
@@ -509,12 +582,12 @@ The returned `Cli` has these members:
 | --- | --- |
 | `run(argv = process.argv): Promise<void>` | Runs with the real process. It installs signal, EPIPE, and crash handlers, sets `process.exitCode`, and re-raises an interrupting signal. It drops the first two `argv` entries. |
 | `execute(args, io, options?): Promise<Outcome>` | Runs one invocation against injected streams without touching the process. `args` excludes `node` and the script. `invoke` uses it. |
-| `options` | The `CliOptions` given to `defineCli`, with the built-in `skills`, `schema`, and `completion` commands appended to `commands`. |
+| `options` | The `CliOptions` given to `defineCli`, with the built-in `skills`, `telemetry`, `schema`, and `completion` commands appended to `commands`. |
 | `root` | The root group of the command tree, including the built-in commands. |
 | `envPrefix` | The resolved prefix, such as `ACME`. |
 | `errors` | The full error registry: the built-in codes and the CLI's `errors`. |
 
-`ExecuteOptions` has three optional fields. `signal` interrupts the command when it is aborted with a signal name, such as `'SIGTERM'`, as the reason. `crash` is a promise that rejects with an uncaught error. `strict` turns on the contract checks.
+`ExecuteOptions` has four optional fields. `signal` interrupts the command when it is aborted with a signal name, such as `'SIGTERM'`, as the reason. `crash` is a promise that rejects with an uncaught error. `strict` turns on the contract checks. `telemetry` receives each telemetry event instead of the sender.
 
 `Outcome` is `{ exitCode: 0 | 1, result, signal }`. `result` is the result object, or `undefined` for help and version. `signal` is the signal to re-raise.
 
@@ -563,6 +636,7 @@ Pairs a handler with its definition for typing. Default-export the result from t
 | `progress({ phase, message, data? })` | Reports progress on stderr. See [Long-running work and signals](#long-running-work-and-signals). |
 | `log(message)` | Writes a line to stderr in any mode. |
 | `checkpoint({ id, next? })` | Prints the job ID now and uses `next` if the command is interrupted. |
+| `telemetry()` | Resolves `{ enabled, optedOut, source, variable? }`. See [Telemetry](#telemetry). |
 | `ok(data, { next? }?)` | Creates the success result. `output` types `data`. Without an output schema, `data` is optional and defaults to `{}`. |
 
 ### `CliError`
@@ -596,6 +670,7 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 | `ErrorBody` | `{ code, message, retryable, retryAfterSeconds?, details? }`. |
 | `InputIssue` | `{ path, message, source?, expected? }`, the items of `invalid_input` details. `expected` lists the accepted values: a group's commands or an enum's members. |
 | `InputOf<S>`, `ParsedOf<S>`, `DataOf<S>` | Input before parsing, input after parsing, and handler data for a schema. |
+| `TelemetryEvent`, `TelemetryEnv`, `TelemetrySender`, `TelemetryOptions`, `TelemetryStatus` | The event, its `env` block, the sender module's default export, the `telemetry` option, and the status. See [Telemetry](#telemetry). |
 | `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
 
 ## Testing API
@@ -604,8 +679,8 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 
 | Export | Description |
 | --- | --- |
-| `invoke(cli, args, options?)` | Runs in process with captured streams. Options are `env` (empty by default, so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, and `strict` (default `true`). Returns `RunResult & { outcome }`. |
-| `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` set. Options are `env`, `stdin`, `keepStdinOpen`, `kill: { signal, when?, afterMs? }`, and `timeoutMs`. `kill` sends the signal once stderr contains `when`, or after `afterMs`. |
+| `invoke(cli, args, options?)` | Runs in process with captured streams. Options are `env` (empty by default, so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, and `strict` (default `true`). Returns `RunResult & { outcome, telemetry }`, where `telemetry` lists the events the run would have sent. It never starts the sender. |
+| `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` and `DO_NOT_TRACK=1` set, so tests send no telemetry. Options are `env`, `stdin`, `keepStdinOpen`, `kill: { signal, when?, afterMs? }`, and `timeoutMs`. `kill` sends the signal once stderr contains `when`, or after `afterMs`. |
 | `assertContract(result)` | Checks the output contract and returns the parsed result. stdout must be exactly one compact JSON object that matches the envelope schema, with `data` or `error` as its first key and no other keys besides `next`. The exit code must be `0` with `data` and `1` with `error`. stdout must have no ANSI codes, and stderr must have no JSON. |
 | `assertDefinitions(cli)` | Resolves every command and fails with all definition errors at once. These include error codes missing from the registry, output schemas that are not an object or an array, and schemas that cannot be converted to JSON Schema. It does not import handlers. |
 | `schemas(cli)` | Every command's `schema` output keyed by path, for snapshot tests. |
@@ -658,7 +733,7 @@ Unbundled, the same CLI costs 27 to 33 ms, mostly from loading zod's modules. To
 
 ## Not yet implemented
 
-The [design milestones](../../docs/agent-cli/framework-design.md#milestones) still include telemetry (the `telemetry` commands and `DO_NOT_TRACK`), a startup-budget check in CI, and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
+The [design milestones](../../docs/agent-cli/framework-design.md#milestones) still include a startup-budget check in CI and NDJSON `--events`. Prompts beyond confirmation, output formats other than JSON and text, and MCP are out of scope.
 
 ## Development
 
