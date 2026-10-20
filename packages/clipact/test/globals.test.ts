@@ -164,6 +164,23 @@ describe('globals', () => {
     assert.ok('data' in list)
   })
 
+  test('the telemetry commands ignore invalid globals', async () => {
+    const tracked = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      globals,
+      commands: [show],
+      telemetry: { sender: 'file:///telemetry.js' },
+    })
+    const env = { ACME_RETRIES: 'many', DO_NOT_TRACK: '1' }
+    const status = await invoke(tracked, ['telemetry', 'status', '--json'], {
+      env,
+    })
+    assert.equal(status.exitCode, 0, status.stdout)
+    const failed = assertContract(await invoke(tracked, ['show'], { env }))
+    assert.equal((failed.error as { code: string }).code, 'invalid_input')
+  })
+
   test('--debug lists each global and its source, redacting secrets', async () => {
     const result = await invoke(cli, ['show', '--debug'], {
       env: { ACME_RETRIES: '5', ACME_SERVICE_TOKEN: 's3cret' },

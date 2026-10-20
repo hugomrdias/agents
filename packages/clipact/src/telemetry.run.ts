@@ -115,7 +115,9 @@ export async function writeState(file: string, state: State): Promise<void> {
 
 /**
  * Decides whether telemetry is on. Any opt-out wins: `DO_NOT_TRACK`, then
- * `<PREFIX>_TELEMETRY=0`, then the saved `disable`. Then `<PREFIX>_TELEMETRY=1`
+ * `<PREFIX>_TELEMETRY=0`, then the saved `disable`. A sandbox without a
+ * network, `CODEX_SANDBOX_NETWORK_DISABLED`, turns it off unless
+ * `<PREFIX>_TELEMETRY=log` only prints events. Then `<PREFIX>_TELEMETRY=1`
  * or `log`, the saved `enable`, and the CLI's default. Without a `telemetry`
  * option, it reads only the environment opt-outs and never the state file.
  *
@@ -165,6 +167,14 @@ export async function resolveTelemetry(
   }
   if (state.telemetry === 'disabled') {
     return resolved({ enabled: false, optedOut: true, source: 'config' })
+  }
+  if (isSet(env.CODEX_SANDBOX_NETWORK_DISABLED) && raw !== 'log') {
+    return resolved({
+      enabled: false,
+      optedOut: false,
+      source: 'env',
+      variable: 'CODEX_SANDBOX_NETWORK_DISABLED',
+    })
   }
   if (raw === '1' || raw === 'true' || raw === 'log') {
     return resolved(
@@ -252,9 +262,6 @@ export async function report(input: ReportInput): Promise<void> {
   const { cli, env, session, resolved } = input
   const telemetry = cli.telemetry
   if (!telemetry || !resolved.status.enabled) {
-    return
-  }
-  if (!resolved.log && isSet(env.CODEX_SANDBOX_NETWORK_DISABLED)) {
     return
   }
   const ci = isSet(env.CI)

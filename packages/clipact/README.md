@@ -290,7 +290,7 @@ clipact handles globals this way:
 
 - They come only from environment variables, never from flags or `--input`. Every field needs an `env` name, written out in full. `envPrefix` is not applied.
 - Values are converted like [environment fallbacks](#input), then validated against the globals schema, which applies its defaults.
-- Every command reads them, except `schema` and `completion`. `--help` and `--version` ignore them. An invalid or missing value is `invalid_input` before the command's own input is read, reported together with invalid framework variables. Each issue's `path` is the variable, such as `ACME_RETRIES`, and a missing value reads `Required; set ACME_RETRIES`.
+- Every command reads them, except `schema`, `completion`, and the framework's `telemetry` commands, so an invalid global never blocks an opt-out. `--help` and `--version` ignore them. An invalid or missing value is `invalid_input` before the command's own input is read, reported together with invalid framework variables. Each issue's `path` is the variable, such as `ACME_RETRIES`, and a missing value reads `Required; set ACME_RETRIES`.
 - `globals.get(ctx)` returns the typed values. It throws a `TypeError` for the context of a CLI defined without these globals.
 - Fields listed in `secrets` show `<redacted>` in `--debug` output, and `schema` leaves out their defaults and examples.
 - Root help lists them under **Environment**, before the framework variables. `schema --list` publishes them under `globals`. `--debug` prints `debug: globals` with the source of each value.
@@ -526,7 +526,7 @@ Set `default: 'off'` to make telemetry opt-in, and `docs` to a page that lists t
 2. `<PREFIX>_TELEMETRY=0` or `false`
 3. `acme telemetry disable`
 
-Then `<PREFIX>_TELEMETRY=1`, `true`, or `log` and `acme telemetry enable` turn telemetry on, and `default` decides the rest. `<PREFIX>_TELEMETRY=log` prints each event to stderr instead of sending it. `--debug` prints each event, waits for the sender, and prints its errors. clipact sends nothing when `CODEX_SANDBOX_NETWORK_DISABLED` is set, on an interruption, for shell completion, or for the `telemetry` commands themselves.
+Then `<PREFIX>_TELEMETRY=1`, `true`, or `log` and `acme telemetry enable` turn telemetry on, and `default` decides the rest. `<PREFIX>_TELEMETRY=log` prints each event to stderr instead of sending it. `--debug` prints each event, waits for the sender, and prints its errors. `CODEX_SANDBOX_NETWORK_DISABLED` turns telemetry off unless `<PREFIX>_TELEMETRY=log`, and `telemetry status` then reports `enabled: false` with that variable; it is not an opt-out, so `optedOut` stays `false`. clipact also sends nothing on an interruption, for shell completion, or for the `telemetry` commands themselves.
 
 The configured CLI gets a `telemetry` group:
 
@@ -586,10 +586,10 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | `CI` | Set, non-empty, and not `0` or `false` | No prompts |
 | `DO_NOT_TRACK` | Set, non-empty, and not `0` or `false` | Turn telemetry off |
 | `<PREFIX>_TELEMETRY` | `1`, `0`, `true`, `false`, `log` | Turn telemetry on or off, or print events instead of sending them |
-| `CODEX_SANDBOX_NETWORK_DISABLED` | Set, non-empty, and not `0` or `false` | Send no telemetry |
+| `CODEX_SANDBOX_NETWORK_DISABLED` | Set, non-empty, and not `0` or `false` | Turn telemetry off, unless `<PREFIX>_TELEMETRY=log` |
 | `NO_COLOR`, `FORCE_COLOR`, `TERM` | Standard | Color in human mode |
 
-`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`. It names only these two variables: globals and command `env` mappings use the names they declare.
+`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`. It names only these three variables: globals and command `env` mappings use the names they declare.
 
 ## API reference
 

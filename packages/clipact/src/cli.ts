@@ -334,11 +334,14 @@ class Invocation {
         return await this.#text(commandHelp(cli, spec, Boolean(mode.agent)))
       }
       // Built-ins print the same JSON in every mode, so they ignore mode
-      // issues, and they never read globals.
+      // issues, and they never read globals. Nor do the framework's
+      // `telemetry` commands, so an invalid global never blocks an opt-out.
       let globals: ResolvedGlobals | undefined
       if (!isBuiltin(node)) {
         const issues = [...this.#state.modeIssues]
-        if (cli.globals) {
+        const telemetry =
+          this.#state.telemetryCommands && path[0] === 'telemetry'
+        if (cli.globals && !telemetry) {
           globals = await resolveGlobals(
             resolveGlobalsSpec(cli.globals),
             this.#state.io.env

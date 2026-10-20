@@ -458,10 +458,23 @@ describe('telemetry events', () => {
   })
 
   test('nothing is sent when the sandbox has no network', async () => {
-    const result = await invoke(cli, ['artifacts', 'ls'], {
-      env: { ...env, CODEX_SANDBOX_NETWORK_DISABLED: '1' },
-    })
+    const sandbox = { ...env, CODEX_SANDBOX_NETWORK_DISABLED: '1' }
+    const result = await invoke(cli, ['artifacts', 'ls'], { env: sandbox })
     assert.deepEqual(result.telemetry, [])
+    const status = await invoke(cli, ['probe', '--json'], { env: sandbox })
+    assert.deepEqual(assertContract(status).data, {
+      enabled: false,
+      optedOut: false,
+      source: 'env',
+      variable: 'CODEX_SANDBOX_NETWORK_DISABLED',
+    })
+    const logged = await invoke(cli, ['probe', '--json'], {
+      env: { ...sandbox, ACME_TELEMETRY: 'log' },
+    })
+    assert.equal(
+      (assertContract(logged).data as { enabled: boolean }).enabled,
+      true
+    )
   })
 
   test('an interrupted command sends nothing', async () => {
