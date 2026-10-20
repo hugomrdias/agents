@@ -24,10 +24,17 @@ import {
   isCliError,
   TRANSIENT_ERROR_CODES,
 } from './errors.ts'
+import { bindGlobals, resolveGlobalsSpec } from './globals.ts'
 import { commandHelp, groupHelp, usage } from './help.ts'
-import { type FrameworkValues, invalidInput, resolveInput } from './input.ts'
+import {
+  type FrameworkValues,
+  invalidInput,
+  type ResolvedGlobals,
+  resolveGlobals,
+  resolveInput,
+} from './input.ts'
 import { type Io, processIo } from './io.ts'
-import { resolveMode } from './mode.ts'
+import { frameworkVariables, resolveEnvPrefix, resolveMode } from './mode.ts'
 import {
   type GlobalFlags,
   missingCommand,
@@ -43,7 +50,7 @@ import {
   Session,
 } from './session.ts'
 import { skillsGroup, skillsPath } from './skills.ts'
-import { type CommandSpec, resolveSpec } from './spec.ts'
+import { type CommandSpec, type FieldSpec, resolveSpec } from './spec.ts'
 import type { ResolvedTelemetry } from './telemetry.run.ts'
 import { TELEMETRY_CONTEXT, telemetryGroup } from './telemetry.ts'
 
@@ -131,9 +138,17 @@ export function defineCli(definition: CliOptions): Cli {
   if (!defines('completion')) {
     commands.push(completionCommand(options))
   }
-  const envPrefix = (options.envPrefix ?? options.name)
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
+  const envPrefix = resolveEnvPrefix(options)
+  if (options.globals) {
+    const reserved = Object.values(frameworkVariables(envPrefix))
+    for (const variable of Object.values(options.globals.env)) {
+      if (reserved.includes(variable as string)) {
+        throw new TypeError(
+          `Global variable ${variable} clashes with a framework variable of "${options.name}"`
+        )
+      }
+    }
+  }
 
   const execute = async (
     args: string[],
@@ -306,11 +321,23 @@ class Invocation {
       if (flags.help) {
         return await this.#text(commandHelp(cli, spec, Boolean(mode.agent)))
       }
-      // Built-ins print the same JSON in every mode, so they ignore mode issues.
-      if (this.#state.modeIssues.length > 0 && !isBuiltin(node)) {
-        throw invalidInput(this.#state.modeIssues)
+      // Built-ins print the same JSON in every mode, so they ignore mode
+      // issues, and they never read globals.
+      let globals: ResolvedGlobals | undefined
+      if (!isBuiltin(node)) {
+        const issues = [...this.#state.modeIssues]
+        if (cli.globals) {
+          globals = await resolveGlobals(
+            resolveGlobalsSpec(cli.globals),
+            this.#state.io.env
+          )
+          issues.push(...globals.issues)
+        }
+        if (issues.length > 0) {
+          throw invalidInput(issues)
+        }
       }
-      const outcome = await this.#command(spec, routed.rest)
+      const outcome = await this.#command(spec, routed.rest, globals)
       if (!isBuiltin(node)) {
         await this.#skillsNotice(path)
       }
@@ -386,7 +413,11 @@ class Invocation {
   }
 
   /** Validates input, applies the confirmation gate, and runs the handler. */
-  async #command(spec: CommandSpec, rest: string[]): Promise<Outcome> {
+  async #command(
+    spec: CommandSpec,
+    rest: string[],
+    globals: ResolvedGlobals | undefined
+  ): Promise<Outcome> {
     const { cli, io, session, signal, mode } = this.#state
     const { command } = spec
     const {
@@ -395,7 +426,19 @@ class Invocation {
       framework,
     } = await resolveInput(spec, rest, io, signal)
     if (session.debug) {
-      session.log(describeSources(spec, input, sources))
+      if (cli.globals && globals) {
+        session.log(
+          describeSources(
+            'globals',
+            resolveGlobalsSpec(cli.globals).fields,
+            globals.value,
+            globals.sources
+          )
+        )
+      }
+      session.log(
+        describeSources(`input for ${spec.path}`, spec.fields, input, sources)
+      )
     }
     await this.#confirm(command, input, framework)
     if (signal.aborted) {
@@ -430,6 +473,9 @@ class Invocation {
     Object.defineProperty(context, TELEMETRY_CONTEXT, {
       value: { env: io.env, envPrefix: this.#state.envPrefix },
     })
+    if (cli.globals && globals) {
+      bindGlobals(context, cli.globals, globals.value)
+    }
     const value = await handler.run(context)
     if (!isOk(value)) {
       throw new DefinitionError(
@@ -691,21 +737,22 @@ function contractViolation(message: string): ResultObject {
   )
 }
 
-/** Lists each input value and its source for `--debug`, redacting secrets. */
+/** Lists each value and its source for `--debug`, redacting secrets. */
 function describeSources(
-  spec: CommandSpec,
-  input: Record<string, unknown>,
+  title: string,
+  fields: FieldSpec[],
+  values: Record<string, unknown>,
   sources: Record<string, string>
 ): string {
-  const lines = spec.fields
+  const lines = fields
     .filter((field) => field.name in sources)
     .map((field) => {
       const value = field.secret
         ? '<redacted>'
-        : JSON.stringify(input[field.name])
+        : JSON.stringify(values[field.name])
       return `  ${field.name} = ${value} (${sources[field.name]})`
     })
-  return `debug: input for ${spec.path}\n${lines.join('\n')}`
+  return `debug: ${title}\n${lines.join('\n')}`
 }
 
 /** Quotes an argument for POSIX shells when needed. */

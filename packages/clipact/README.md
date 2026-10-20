@@ -21,6 +21,7 @@ The [launchpad example](../../examples/launchpad/README.md) is a complete CLI th
   - [Modes and agent detection](#modes-and-agent-detection)
   - [Input](#input)
   - [Secrets](#secrets)
+  - [Globals](#globals)
   - [Side effects and confirmation](#side-effects-and-confirmation)
   - [Errors](#errors)
   - [Long-running work and signals](#long-running-work-and-signals)
@@ -264,6 +265,39 @@ A field listed in `secrets` must have an `env` mapping and comes only from that 
 - Help lists it under **Environment**.
 - `schema` names it in `secrets` and leaves out its default and examples.
 
+### Globals
+
+Settings that every command uses, such as an API URL or a state directory, are globals. Define them once with `defineGlobals`, pass them to `defineCli`, and read them in a handler with `globals.get(ctx)`:
+
+```ts
+// src/globals.ts
+import { defineGlobals } from 'clipact'
+import * as z from 'zod'
+
+export const globals = defineGlobals({
+  input: z.object({
+    apiUrl: z.url().default('https://api.acme.dev').describe('API endpoint'),
+    retries: z.number().int().min(0).default(3).describe('Request retries'),
+  }),
+  env: { apiUrl: 'ACME_API_URL', retries: 'ACME_RETRIES' },
+})
+
+// src/cli.ts:     defineCli({ name: 'acme', version, globals, commands })
+// in a handler:   const { apiUrl, retries } = globals.get(ctx)
+```
+
+clipact handles globals this way:
+
+- They come only from environment variables, never from flags or `--input`. Every field needs an `env` name, written out in full. `envPrefix` is not applied.
+- Values are converted like [environment fallbacks](#input), then validated against the globals schema, which applies its defaults.
+- Every command reads them, except `schema` and `completion`. `--help` and `--version` ignore them. An invalid or missing value is `invalid_input` before the command's own input is read, reported together with invalid framework variables. Each issue's `path` is the variable, such as `ACME_RETRIES`, and a missing value reads `Required; set ACME_RETRIES`.
+- `globals.get(ctx)` returns the typed values. It throws a `TypeError` for the context of a CLI defined without these globals.
+- Fields listed in `secrets` show `<redacted>` in `--debug` output, and `schema` leaves out their defaults and examples.
+- Root help lists them under **Environment**, before the framework variables. `schema --list` publishes them under `globals`. `--debug` prints `debug: globals` with the source of each value.
+- `defineCli` throws a `TypeError` when a global uses `<PREFIX>_OUTPUT` or `<PREFIX>_AGENT`. `assertDefinitions` also reports a variable that a command's `env` uses too.
+
+When a setting also needs a flag, declare it as an input field of each command instead, with a shared schema fragment.
+
 ### Side effects and confirmation
 
 | Property | Effect |
@@ -354,9 +388,9 @@ clipact registers its signal listeners with `process.once`, so a second signal e
 | Command | Output |
 | --- | --- |
 | `acme --version` | The version, on stdout |
-| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions |
-| `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, and side effects |
-| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], result }`, where `result` is the JSON Schema of the result envelope |
+| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions. Root help also has an **Environment** section: each [global](#globals), then `<PREFIX>_OUTPUT` and `<PREFIX>_AGENT`. |
+| `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, and side effects. With globals, a line points to root help for them. |
+| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], env, globals, result }`. `env` is `{ output, agent }`, the framework variable names. `globals` is `{ env, secrets, input }`, as in `schema <command>`, and only appears when the CLI has globals. `env` and `globals` appear only for the root. `result` is the JSON Schema of the result envelope. |
 | `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
@@ -547,6 +581,7 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | --- | --- | --- |
 | `<PREFIX>_OUTPUT` | `json`, `human` | Default format |
 | `<PREFIX>_AGENT` | `1`, `0`, `true`, `false` | Force or disable agent mode |
+| [Globals](#globals) | Per the globals schema | CLI-wide settings |
 | `AI_AGENT`, `AGENT`, vendor variables | Any | Agent detection |
 | `CI` | Set, non-empty, and not `0` or `false` | No prompts |
 | `DO_NOT_TRACK` | Set, non-empty, and not `0` or `false` | Turn telemetry off |
@@ -554,7 +589,7 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | `CODEX_SANDBOX_NETWORK_DISABLED` | Set, non-empty, and not `0` or `false` | Send no telemetry |
 | `NO_COLOR`, `FORCE_COLOR`, `TERM` | Standard | Color in human mode |
 
-`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`.
+`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`. It names only these two variables: globals and command `env` mappings use the names they declare.
 
 ## API reference
 
@@ -570,6 +605,7 @@ Creates a CLI from its command tree.
 | `version` | `string` | Printed by `--version` and `schema --list`. |
 | `description` | `string?` | Shown in root help. |
 | `envPrefix` | `string?` | Prefix of framework variables. Defaults to the name. |
+| `globals` | `Globals?` | CLI-wide settings read only from the environment, created by [`defineGlobals`](#defineglobalsoptions-globals). |
 | `commands` | `CommandNode[]` | Top-level commands and groups. |
 | `skills` | `URL \| string`? | Directory of bundled skills (`<name>/SKILL.md`). Adds the [`skills` commands](#agent-skills). |
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
@@ -639,6 +675,20 @@ Pairs a handler with its definition for typing. Default-export the result from t
 | `telemetry()` | Resolves `{ enabled, optedOut, source, variable? }`. See [Telemetry](#telemetry). |
 | `ok(data, { next? }?)` | Creates the success result. `output` types `data`. Without an output schema, `data` is optional and defaults to `{}`. |
 
+### `defineGlobals(options): Globals`
+
+Defines the CLI's [globals](#globals).
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `input` | `Schema` | One object schema for every global. |
+| `env` | `{ [field]: string }` | The variable of every field, such as `{ apiUrl: 'ACME_API_URL' }`. TypeScript requires a name for each field. |
+| `secrets` | `Field[]?` | Fields redacted in `--debug` output and `schema` defaults. |
+
+`defineGlobals` throws a `TypeError` for a secret without an `env` mapping. It checks the other field rules when the globals are first read or described, and `assertDefinitions` checks them in tests.
+
+The returned `Globals` has `get(ctx)`, which returns the validated values (`ParsedOf<input>`) for a handler's context.
+
 ### `CliError`
 
 ```ts
@@ -671,7 +721,7 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 | `InputIssue` | `{ path, message, source?, expected? }`, the items of `invalid_input` details. `expected` lists the accepted values: a group's commands or an enum's members. |
 | `InputOf<S>`, `ParsedOf<S>`, `DataOf<S>` | Input before parsing, input after parsing, and handler data for a schema. |
 | `TelemetryEvent`, `TelemetryEnv`, `TelemetrySender`, `TelemetryOptions`, `TelemetryStatus` | The event, its `env` block, the sender module's default export, the `telemetry` option, and the status. See [Telemetry](#telemetry). |
-| `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
+| `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Globals`, `GlobalsOptions`, `AnyGlobals`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
 
 ## Testing API
 
@@ -679,11 +729,12 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 
 | Export | Description |
 | --- | --- |
-| `invoke(cli, args, options?)` | Runs in process with captured streams. Options are `env` (empty by default, so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, and `strict` (default `true`). Returns `RunResult & { outcome, telemetry }`, where `telemetry` lists the events the run would have sent. It never starts the sender. |
+| `invoke(cli, args, options?)` | Runs in process with captured streams. Options are `env` (empty by default, so the runner's agent variables do not leak in), `stdin` (text or a stream), `tty`, `signal`, and `strict` (default `true`). Framework variables, command `env` fallbacks, and globals all come from `env`. `process.env` is never read. Returns `RunResult & { outcome, telemetry }`, where `telemetry` lists the events the run would have sent. It never starts the sender. |
 | `exec(bin, args, options?)` | Spawns `node <bin> …` without a TTY and with only `PATH` and `DO_NOT_TRACK=1` set, so tests send no telemetry. Options are `env`, `stdin`, `keepStdinOpen`, `kill: { signal, when?, afterMs? }`, and `timeoutMs`. `kill` sends the signal once stderr contains `when`, or after `afterMs`. |
 | `assertContract(result)` | Checks the output contract and returns the parsed result. stdout must be exactly one compact JSON object that matches the envelope schema, with `data` or `error` as its first key and no other keys besides `next`. The exit code must be `0` with `data` and `1` with `error`. stdout must have no ANSI codes, and stderr must have no JSON. |
-| `assertDefinitions(cli)` | Resolves every command and fails with all definition errors at once. These include error codes missing from the registry, output schemas that are not an object or an array, and schemas that cannot be converted to JSON Schema. It does not import handlers. |
+| `assertDefinitions(cli)` | Resolves every command and the globals, and fails with all definition errors at once. These include error codes missing from the registry, output schemas that are not an object or an array, schemas that cannot be converted to JSON Schema, a global without an `env` name, a global that uses a framework variable, and a command `env` variable that is also a global or a framework variable. It does not import handlers. |
 | `schemas(cli)` | Every command's `schema` output keyed by path, for snapshot tests. |
+| `globalsSchema(cli)` | The `globals` block of `schema --list`, or `undefined` without globals, for snapshot tests. |
 
 `RunResult` is `{ exitCode, signal, stdout, stderr, json }`. `exitCode` is `null` when a signal ended the run.
 

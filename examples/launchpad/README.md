@@ -22,7 +22,7 @@ node bin/launchpad.js schema deploys create
 AI_AGENT=demo node bin/launchpad.js sites delete my-blog
 ```
 
-Mock knobs, read only by the fake SDK: `LAUNCHPAD_HOME` (state directory, default `<tmpdir>/launchpad-example`), `LAUNCHPAD_MOCK_LATENCY_MS` (delay per uploaded file, default 150), and `LAUNCHPAD_MOCK_RATE_LIMIT=1` (every `sites list` is rate limited).
+Mock knobs are clipact [globals](../../packages/clipact/README.md#globals), declared in `src/globals.ts` and listed under **Environment** in `launchpad --help`: `LAUNCHPAD_HOME` (state directory, default `<tmpdir>/launchpad-example`), `LAUNCHPAD_MOCK_LATENCY_MS` (delay per uploaded file, default 150), and `LAUNCHPAD_MOCK_RATE_LIMIT=1` (every `sites list` is rate limited). Handlers pass them to the fake SDK, which never reads `process.env`.
 
 ## Commands
 
@@ -82,7 +82,8 @@ bin/launchpad.js          entry shim: enableCompileCache, then import('../dist/m
 scripts/build.ts          esbuild: one ESM entry plus a chunk per handler
 scripts/bench.ts          startup timing against node -e ''
 src/main.ts               cli.run()
-src/cli.ts                defineCli: commands, envPrefix, mapError, errors
+src/cli.ts                defineCli: commands, envPrefix, globals, mapError, errors
+src/globals.ts            defineGlobals: mock settings read only from the environment
 src/errors.ts             error registry: a description and details schema per code
 src/commands/*.ts         definitions only (zod + clipact)
 src/handlers/**           handlers, loaded lazily per command

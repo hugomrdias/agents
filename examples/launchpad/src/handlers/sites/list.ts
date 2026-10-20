@@ -3,7 +3,7 @@ import { list } from '../../commands/sites.ts'
 import { client } from '../client.ts'
 
 export default defineHandler(list, async (ctx) => {
-  const api = await client(ctx.input, ctx.signal)
+  const api = await client(ctx)
   const { sites, nextCursor } = api.listSites(ctx.input)
   return ctx.ok(
     {

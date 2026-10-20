@@ -44,5 +44,11 @@ export {
   isCliError,
   type Next,
 } from './errors.ts'
+export {
+  type AnyGlobals,
+  defineGlobals,
+  type Globals,
+  type GlobalsOptions,
+} from './globals.ts'
 export type { Io, OutputStream } from './io.ts'
 export type { DataResult, ErrorResult, ResultObject } from './session.ts'

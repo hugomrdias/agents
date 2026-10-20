@@ -3,7 +3,7 @@ import { addDomains } from '../../commands/sites.ts'
 import { client } from '../client.ts'
 
 export default defineHandler(addDomains, async (ctx) => {
-  const api = await client(ctx.input, ctx.signal)
+  const api = await client(ctx)
   const domains = []
   for (const name of ctx.input.domains) {
     domains.push(await api.addDomain(ctx.input.site, name))
