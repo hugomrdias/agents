@@ -156,6 +156,14 @@ export interface Context<
   log(message: string): void
   /** Registers a long-running job; its ID is printed now and `next` is used if interrupted. */
   checkpoint(checkpoint: Checkpoint): void
+  /**
+   * Resolves whether the framework sends telemetry and whether the user opted
+   * out. Check `optedOut` before the application's own reporting, such as an
+   * agent header on API requests. Never change output or behavior based on it.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+   */
+  telemetry(): Promise<TelemetryStatus>
   /** Creates the successful result; `data` defaults to `{}`. */
   ok(
     ...args: O extends Schema
@@ -176,6 +184,95 @@ export interface Handler {
 /** Returns `true` for a value created by {@link defineHandler}. */
 export function isHandler(value: unknown): value is Handler {
   return typeof value === 'object' && value !== null && HANDLER in value
+}
+
+/**
+ * Whether telemetry is on, as reported by `telemetry status` and
+ * `ctx.telemetry()`.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#opting-out
+ */
+export interface TelemetryStatus {
+  /** The framework sends an event for this run. */
+  enabled: boolean
+  /** `DO_NOT_TRACK`, `<PREFIX>_TELEMETRY=0`, or `telemetry disable` turned telemetry off. */
+  optedOut: boolean
+  /** What decided `enabled`; `unconfigured` when the CLI has no `telemetry` option. */
+  source: 'env' | 'config' | 'default' | 'unconfigured'
+  /** The environment variable behind the answer, if any. */
+  variable?: string
+}
+
+/**
+ * One telemetry event: names and outcomes only, never argument values,
+ * paths, or messages.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#what-to-collect
+ */
+export interface TelemetryEvent {
+  /** Version of this event's shape. */
+  eventVersion: 1
+  /** The CLI's `name` and `version`. */
+  cli: { name: string; version: string }
+  /** Command path, such as `artifacts put`; empty for the root. */
+  command: string
+  /** Names of known flags typed on the command line, sorted, without values. */
+  flags: string[]
+  /** The error code of a failed command; `null` on success. */
+  errorCode: string | null
+  /** When the result was written, as an ISO 8601 string. */
+  timestamp: string
+  /** Milliseconds from the start of the run until the result was written. */
+  durationMs: number
+  /** Where and how the command ran. */
+  env: TelemetryEnv
+  /** Random ID stored in the state file; `null` in CI and when it cannot be saved. */
+  installId: string | null
+}
+
+/** The `env` block of a {@link TelemetryEvent}. */
+export interface TelemetryEnv {
+  /** Node.js version, such as `24.21.0`. */
+  node: string
+  os: string
+  arch: string
+  /** `ci` when `CI` is set, otherwise whether a human can answer prompts. */
+  mode: 'interactive' | 'noninteractive' | 'ci'
+  format: Mode['format']
+  /** CI or deployment provider, such as `github_actions`. */
+  provider: string | null
+  /** Detected or forced agent name. */
+  agent: string | null
+  /** The agent's version, when `AI_AGENT` or `AGENT` carries one. */
+  agentVersion: string | null
+}
+
+/**
+ * The default export of a telemetry sender module. It runs in a detached
+ * child process, so it may take its time; `signal` aborts after 10 seconds.
+ */
+export type TelemetrySender = (
+  event: TelemetryEvent,
+  options: { signal: AbortSignal }
+) => void | Promise<void>
+
+/**
+ * Telemetry settings for {@link defineCli}.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+ */
+export interface TelemetryOptions {
+  /**
+   * The module that default-exports a {@link TelemetrySender}, such as
+   * `new URL('./telemetry.js', import.meta.url)`. A string must be a `file:`
+   * URL or an absolute path. It must exist as a file at run time, so make it
+   * its own entry point when bundling.
+   */
+  sender: URL | string
+  /** Whether telemetry is on before the user chooses; defaults to `on`. */
+  default?: 'on' | 'off'
+  /** A page that lists the collected fields, linked from the first-run notice. */
+  docs?: string
 }
 
 /** Translates a third-party error into a {@link CliError}, or returns `undefined`. */
@@ -215,6 +312,12 @@ export interface CliOptions {
    * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#errors-next-steps-and-retries
    */
   errors?: ErrorRegistry
+  /**
+   * Sends usage events after each command and adds the `telemetry` commands.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#telemetry
+   */
+  telemetry?: TelemetryOptions
 }
 
 /**

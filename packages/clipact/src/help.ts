@@ -121,9 +121,15 @@ function environmentRows(cli: CliOptions): [string, string][] {
       ])
     }
   }
-  const { output, agent } = frameworkVariables(resolveEnvPrefix(cli))
+  const { output, agent, telemetry } = frameworkVariables(resolveEnvPrefix(cli))
   rows.push([output, 'Default output format: json or human'])
   rows.push([agent, 'Force or disable agent mode: 1, 0, true, or false'])
+  if (cli.telemetry) {
+    rows.push([
+      telemetry,
+      'Turn usage telemetry on or off, or print events: 1, 0, true, false, or log',
+    ])
+  }
   return rows
 }
 

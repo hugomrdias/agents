@@ -31,18 +31,42 @@ export function isSet(value: string | undefined): value is string {
  * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#agent-detection-and-help
  */
 export function detectAgent(env: Env): string | false {
+  return identifyAgent(env)?.agent ?? false
+}
+
+/** A detected agent, with its version when the variable carries one. */
+export interface DetectedAgent {
+  agent: string
+  version?: string
+}
+
+/**
+ * Detects a coding agent like {@link detectAgent}, and splits an `AI_AGENT`
+ * or `AGENT` value of the form `<name>_<version>_agent`, such as Claude
+ * Code's `claude-code_2-1-299_agent`, into the name and the version. The
+ * version starts with a digit, so `my_custom_agent` stays one name.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#agent-detection-and-help
+ */
+export function identifyAgent(env: Env): DetectedAgent | undefined {
   for (const variable of ['AI_AGENT', 'AGENT']) {
     const value = env[variable]
     if (isSet(value)) {
-      return value === '1' || value === 'true' ? 'unknown' : value
+      if (value === '1' || value === 'true') {
+        return { agent: 'unknown' }
+      }
+      const match = /^(.+?)_(\d[^_]*)_agent$/.exec(value)
+      return match
+        ? { agent: match[1] as string, version: match[2] as string }
+        : { agent: value }
     }
   }
   for (const [variable, agent] of VENDOR_VARIABLES) {
     if (isSet(env[variable])) {
-      return agent
+      return { agent }
     }
   }
-  return false
+  return undefined
 }
 
 /** Parses common boolean spellings: `true`, `false`, `1`, and `0`. */

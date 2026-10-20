@@ -164,6 +164,23 @@ describe('globals', () => {
     assert.ok('data' in list)
   })
 
+  test('the telemetry commands ignore invalid globals', async () => {
+    const tracked = defineCli({
+      name: 'acme',
+      version: '1.0.0',
+      globals,
+      commands: [show],
+      telemetry: { sender: 'file:///telemetry.js' },
+    })
+    const env = { ACME_RETRIES: 'many', DO_NOT_TRACK: '1' }
+    const status = await invoke(tracked, ['telemetry', 'status', '--json'], {
+      env,
+    })
+    assert.equal(status.exitCode, 0, status.stdout)
+    const failed = assertContract(await invoke(tracked, ['show'], { env }))
+    assert.equal((failed.error as { code: string }).code, 'invalid_input')
+  })
+
   test('--debug lists each global and its source, redacting secrets', async () => {
     const result = await invoke(cli, ['show', '--debug'], {
       env: { ACME_RETRIES: '5', ACME_SERVICE_TOKEN: 's3cret' },
@@ -219,6 +236,18 @@ describe('globals', () => {
       /Global variable ACME_OUTPUT clashes with a framework variable of "acme"/
     )
   })
+
+  test('defineCli rejects a global that uses <PREFIX>_TELEMETRY', () => {
+    const clash = defineGlobals({
+      input: z.object({ telemetry: z.string().optional() }),
+      env: { telemetry: 'ACME_TELEMETRY' },
+    })
+    assert.throws(
+      () =>
+        defineCli({ name: 'acme', version: '1', globals: clash, commands: [] }),
+      /Global variable ACME_TELEMETRY clashes with a framework variable/
+    )
+  })
 })
 
 describe('globals help and discovery', () => {
@@ -270,7 +299,11 @@ describe('globals help and discovery', () => {
       'globals',
       'result',
     ])
-    assert.deepEqual(data.env, { output: 'ACME_OUTPUT', agent: 'ACME_AGENT' })
+    assert.deepEqual(data.env, {
+      output: 'ACME_OUTPUT',
+      agent: 'ACME_AGENT',
+      telemetry: 'ACME_TELEMETRY',
+    })
     const block = data.globals as {
       env: Record<string, string>
       secrets: string[]

@@ -135,18 +135,39 @@ export const SKILLS_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
   },
 })
 
+/** Error codes of the framework's `telemetry` commands, registered when they are installed. */
+export const TELEMETRY_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
+  state_unwritable: {
+    description:
+      'The CLI could not save its state file, which holds the telemetry choice.',
+    details: fromJsonSchema({
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The state file' },
+      },
+      additionalProperties: false,
+    }),
+  },
+})
+
 /**
  * Returns a CLI's full error registry: the framework's codes and its own.
  * Throws a `TypeError` when the CLI redefines a framework code.
  *
  * @param own - The CLI's `errors` option.
  * @param skills - Whether the framework's `skills` commands are installed.
+ * @param telemetry - Whether the framework's `telemetry` commands are installed.
  */
 export function errorRegistry(
   own: ErrorRegistry | undefined,
-  skills: boolean
+  skills: boolean,
+  telemetry = false
 ): Readonly<ErrorRegistry> {
-  const framework = { ...BUILTIN_ERRORS, ...(skills ? SKILLS_ERRORS : {}) }
+  const framework = {
+    ...BUILTIN_ERRORS,
+    ...(skills ? SKILLS_ERRORS : {}),
+    ...(telemetry ? TELEMETRY_ERRORS : {}),
+  }
   for (const code of Object.keys(own ?? {})) {
     if (code in framework) {
       throw new TypeError(

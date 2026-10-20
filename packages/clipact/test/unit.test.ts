@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { Writable } from 'node:stream'
 import { describe, test } from 'node:test'
 import * as z from 'zod'
+import { identifyAgent } from '../src/agent.ts'
 import {
   type AnyCommand,
   defineCli,
@@ -28,11 +29,35 @@ describe('detectAgent', () => {
     )
     assert.equal(detectAgent({ AGENT: 'amp' }), 'amp')
     assert.equal(detectAgent({ AI_AGENT: '1' }), 'unknown')
+    assert.equal(
+      detectAgent({ AI_AGENT: 'claude-code_2-1-299_agent' }),
+      'claude-code'
+    )
     assert.equal(detectAgent({ CODEX_THREAD_ID: 't1' }), 'codex')
     assert.equal(
       detectAgent({ AI_AGENT: '0', CI: 'true', TERM: 'dumb' }),
       false
     )
+  })
+})
+
+describe('identifyAgent', () => {
+  test('splits <name>_<version>_agent into the name and the version', () => {
+    assert.deepEqual(identifyAgent({ AI_AGENT: 'claude-code_2-1-299_agent' }), {
+      agent: 'claude-code',
+      version: '2-1-299',
+    })
+    assert.deepEqual(identifyAgent({ AGENT: 'amp' }), { agent: 'amp' })
+    assert.deepEqual(identifyAgent({ AI_AGENT: 'my_tool' }), {
+      agent: 'my_tool',
+    })
+    assert.deepEqual(identifyAgent({ AI_AGENT: 'my_custom_agent' }), {
+      agent: 'my_custom_agent',
+    })
+    assert.deepEqual(identifyAgent({ GEMINI_CLI: '1' }), {
+      agent: 'gemini-cli',
+    })
+    assert.equal(identifyAgent({}), undefined)
   })
 })
 
