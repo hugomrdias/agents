@@ -22,6 +22,8 @@ export const telemetryContexts: WeakMap<object, TelemetryContext> =
 export interface TelemetryContext {
   env: Env
   envPrefix: string
+  /** The CLI's folder, or `undefined` when there is none. */
+  dir: string | undefined
 }
 
 /** Builds the output schema of the `telemetry` commands. */

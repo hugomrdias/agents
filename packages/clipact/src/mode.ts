@@ -17,17 +17,20 @@ export function resolveEnvPrefix(
 /**
  * Names of the framework variables for a prefix, such as `ACME_OUTPUT`.
  * `<PREFIX>_TELEMETRY` is reserved even without a `telemetry` option,
- * because `ctx.telemetry()` reads its opt-out.
+ * because `ctx.telemetry()` reads its opt-out. `<PREFIX>_CONFIG_DIR` moves
+ * the CLI's folder.
  */
 export function frameworkVariables(prefix: string): {
   output: string
   agent: string
   telemetry: string
+  config: string
 } {
   return {
     output: `${prefix}_OUTPUT`,
     agent: `${prefix}_AGENT`,
     telemetry: `${prefix}_TELEMETRY`,
+    config: `${prefix}_CONFIG_DIR`,
   }
 }
 

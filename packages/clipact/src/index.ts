@@ -52,3 +52,9 @@ export {
 } from './globals.ts'
 export type { Io, OutputStream } from './io.ts'
 export type { DataResult, ErrorResult, ResultObject } from './session.ts'
+export {
+  type AnyStore,
+  defineStore,
+  type Store,
+  type StoreOptions,
+} from './storage.ts'

@@ -52,6 +52,13 @@ import {
 } from './session.ts'
 import { skillsGroup, skillsPath } from './skills.ts'
 import { type CommandSpec, type FieldSpec, resolveSpec } from './spec.ts'
+import {
+  bindStorage,
+  contextDir,
+  resolveDir,
+  type StorageAccess,
+  storageError,
+} from './storage.ts'
 import type { ResolvedTelemetry } from './telemetry.run.ts'
 import { telemetryContexts, telemetryGroup } from './telemetry.ts'
 
@@ -114,11 +121,7 @@ export function defineCli(definition: CliOptions): Cli {
   // An application's own `telemetry` command replaces the framework's, and events are still sent.
   const telemetryCommands =
     Boolean(definition.telemetry) && !defines('telemetry')
-  const errors = errorRegistry(
-    definition.errors,
-    Boolean(skills),
-    telemetryCommands
-  )
+  const errors = errorRegistry(definition.errors, Boolean(skills))
   const commands = [...definition.commands]
   const options: CliOptions = { ...definition, commands }
   const root: Group = {
@@ -173,7 +176,14 @@ export function defineCli(definition: CliOptions): Cli {
       ? AbortSignal.any([controller.signal, executeOptions.signal])
       : controller.signal
     const flags = scanGlobalFlags(args)
-    const { mode, issues: modeIssues } = resolveMode(flags, io, envPrefix)
+    const { mode, issues } = resolveMode(flags, io, envPrefix)
+    const variable = frameworkVariables(envPrefix).config
+    const { dir, issues: dirIssues } = resolveDir(
+      options.name,
+      variable,
+      io.env
+    )
+    const modeIssues = [...issues, ...dirIssues]
     const session = new Session(options, io, mode, flags.debug)
     const invocation = new Invocation({
       cli: options,
@@ -189,6 +199,7 @@ export function defineCli(definition: CliOptions): Cli {
       strict: executeOptions.strict === true,
       errors,
       envPrefix,
+      storage: { dir, variable, store: options.store },
       telemetryCommands,
       started,
     })
@@ -277,6 +288,8 @@ interface InvocationState {
   errors: Readonly<ErrorRegistry>
   /** Framework variable prefix, such as `ACME`. */
   envPrefix: string
+  /** The CLI's folder, its variable, and its store. */
+  storage: StorageAccess
   /** The framework's `telemetry` commands are installed. */
   telemetryCommands: boolean
   /** `performance.now()` when the invocation started. */
@@ -384,6 +397,7 @@ class Invocation {
         error = mapFailure
       }
     }
+    cliError ??= storageError(error, this.#state.storage.dir)
     if (!cliError) {
       if (session.debug && error instanceof Error && error.stack) {
         session.log(error.stack)
@@ -433,7 +447,7 @@ class Invocation {
     rest: string[],
     globals: ResolvedGlobals | undefined
   ): Promise<Outcome> {
-    const { cli, io, session, signal, mode } = this.#state
+    const { cli, io, session, signal, mode, storage } = this.#state
     const { command } = spec
     const {
       value: input,
@@ -484,11 +498,14 @@ class Invocation {
       },
       ok: (data, options) => createOk(data ?? {}, options?.next),
       telemetry: async () => ({ ...(await this.#resolveTelemetry()).status }),
+      dir: (options) => contextDir(storage, options?.create !== false),
     }
     telemetryContexts.set(context, {
       env: io.env,
       envPrefix: this.#state.envPrefix,
+      dir: storage.dir,
     })
+    bindStorage(context, storage)
     if (cli.globals && globals) {
       bindGlobals(context, cli.globals, globals.value)
     }
@@ -576,9 +593,9 @@ class Invocation {
 
   /** Resolves the telemetry status once per invocation, loading its module on first use. */
   #resolveTelemetry(): Promise<ResolvedTelemetry> {
-    const { cli, envPrefix, io } = this.#state
+    const { cli, envPrefix, io, storage } = this.#state
     this.#telemetry ??= import('./telemetry.run.ts').then((run) =>
-      run.resolveTelemetry(cli, envPrefix, io.env)
+      run.resolveTelemetry(cli, envPrefix, io.env, storage.dir)
     )
     return this.#telemetry
   }

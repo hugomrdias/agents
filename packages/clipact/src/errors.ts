@@ -135,18 +135,30 @@ export const SKILLS_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
   },
 })
 
-/** Error codes of the framework's `telemetry` commands, registered when they are installed. */
-export const TELEMETRY_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
+/** `details` of the storage errors: the file or folder concerned. */
+const storagePath = fromJsonSchema<{ path?: string }>({
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: "A path in the CLI's folder" },
+  },
+  additionalProperties: false,
+})
+
+/**
+ * Error codes of the CLI's folder, registered for every CLI because every
+ * handler can use `ctx.dir()`. A command that returns one declares it in
+ * `errors`.
+ */
+export const STORAGE_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
   state_unwritable: {
     description:
-      'The CLI could not save its state file, which holds the telemetry choice.',
-    details: fromJsonSchema({
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'The state file' },
-      },
-      additionalProperties: false,
-    }),
+      'The CLI could not create its folder or write a file in it, such as the saved telemetry choice; set <PREFIX>_CONFIG_DIR to a writable folder.',
+    details: storagePath,
+  },
+  config_invalid: {
+    description:
+      "A file in the CLI's folder is corrupt or does not match its schema; fix or remove it.",
+    details: storagePath,
   },
 })
 
@@ -156,17 +168,15 @@ export const TELEMETRY_ERRORS: Readonly<ErrorRegistry> = Object.freeze({
  *
  * @param own - The CLI's `errors` option.
  * @param skills - Whether the framework's `skills` commands are installed.
- * @param telemetry - Whether the framework's `telemetry` commands are installed.
  */
 export function errorRegistry(
   own: ErrorRegistry | undefined,
-  skills: boolean,
-  telemetry = false
+  skills: boolean
 ): Readonly<ErrorRegistry> {
   const framework = {
     ...BUILTIN_ERRORS,
+    ...STORAGE_ERRORS,
     ...(skills ? SKILLS_ERRORS : {}),
-    ...(telemetry ? TELEMETRY_ERRORS : {}),
   }
   for (const code of Object.keys(own ?? {})) {
     if (code in framework) {

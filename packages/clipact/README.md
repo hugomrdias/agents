@@ -22,6 +22,7 @@ The [launchpad example](../../examples/launchpad/README.md) is a complete CLI th
   - [Input](#input)
   - [Secrets](#secrets)
   - [Globals](#globals)
+  - [Storage](#storage)
   - [Side effects and confirmation](#side-effects-and-confirmation)
   - [Errors](#errors)
   - [Long-running work and signals](#long-running-work-and-signals)
@@ -267,7 +268,7 @@ A field listed in `secrets` must have an `env` mapping and comes only from that 
 
 ### Globals
 
-Settings that every command uses, such as an API URL or a state directory, are globals. Define them once with `defineGlobals`, pass them to `defineCli`, and read them in a handler with `globals.get(ctx)`:
+Settings that every command uses, such as an API URL, are globals. Define them once with `defineGlobals`, pass them to `defineCli`, and read them in a handler with `globals.get(ctx)`:
 
 ```ts
 // src/globals.ts
@@ -294,9 +295,57 @@ clipact handles globals this way:
 - `globals.get(ctx)` returns the typed values. It throws a `TypeError` for the context of a CLI defined without these globals.
 - Fields listed in `secrets` show `<redacted>` in `--debug` output, and `schema` leaves out their defaults and examples.
 - Root help lists them under **Environment**, before the framework variables. `schema --list` publishes them under `globals`. `--debug` prints `debug: globals` with the source of each value.
-- `defineCli` throws a `TypeError` when a global uses `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, or `<PREFIX>_TELEMETRY`. `assertDefinitions` also reports a variable that a command's `env` uses too.
+- `defineCli` throws a `TypeError` when a global uses `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, `<PREFIX>_TELEMETRY`, or `<PREFIX>_CONFIG_DIR`. `assertDefinitions` also reports a variable that a command's `env` uses too.
 
 When a setting also needs a flag, declare it as an input field of each command instead, with a shared schema fragment.
+
+### Storage
+
+Every CLI has one folder for the files it keeps between runs, named after the CLI:
+
+| OS | Folder |
+| --- | --- |
+| macOS | `~/Library/Application Support/acme` |
+| Linux and other systems | `$XDG_DATA_HOME/acme`, default `~/.local/share/acme` |
+| Windows | `%LOCALAPPDATA%\acme` |
+
+`<PREFIX>_CONFIG_DIR` replaces it with an absolute path. A relative path is `invalid_input` and an empty value counts as unset, so the folder never depends on the working directory. `XDG_DATA_HOME` counts only outside macOS and Windows, and only when it is absolute.
+
+The folder holds three kinds of files:
+
+- `clipact.json`, clipact's own file: the saved [telemetry](#telemetry) choice, whether the notice was shown, and the installation ID. Don't write it.
+- `config.json`, the CLI's store, when it defines one.
+- Any file the CLI adds itself, such as a database.
+
+`await ctx.dir()` returns the folder, creating it with mode `0700` on the first call, because it may hold credentials. `await ctx.dir({ create: false })` returns the path without creating anything, such as for a `doctor` command. Both throw `state_unwritable` when there is no folder, with neither `HOME` (`LOCALAPPDATA` on Windows) nor `<PREFIX>_CONFIG_DIR` set, and `ctx.dir()` also throws it when the folder cannot be created. Nothing creates the folder until a command needs it, so `--help`, `schema`, and `telemetry status` work in read-only sandboxes.
+
+For settings and state the CLI saves, such as a login or a default network, define a store. It is one JSON file read and written with [iso-conf](https://github.com/hugomrdias/iso-repo/tree/main/packages/iso-conf):
+
+```ts
+// src/store.ts
+import { defineStore } from 'clipact'
+import * as z from 'zod'
+
+export const store = defineStore({
+  schema: z.object({
+    network: z.enum(['mainnet', 'calibration']).optional(),
+    sessions: z.record(z.string(), z.string()).default({}),
+  }),
+})
+
+// src/cli.ts:     defineCli({ name: 'acme', version, store, commands })
+// in a handler:   const conf = await store.get(ctx)
+//                 conf.set('network', 'mainnet')
+```
+
+clipact handles the store this way:
+
+- `await store.get(ctx)` returns an iso-conf `Conf` for `config.json` in the folder. clipact imports iso-conf only then, so other commands, `--help`, and `schema` never load it.
+- Reading never writes. A missing file reads as the schema's defaults and creates no file. clipact creates the folder when it opens the store, if it can, and reads still work when it cannot.
+- Each write is atomic, gives the file mode `0600`, and holds a lock, so parallel runs of the CLI do not lose each other's changes.
+- A corrupt file, or one that fails the schema, is `config_invalid` with the file's `path`. A write the folder refuses is `state_unwritable`. A lock that another process holds for more than a second is `timeout`. A command that uses the store declares `state_unwritable` and `config_invalid` in its `errors`.
+- The store never fills command input. A handler that falls back to a saved value, such as the default network, reads the store itself.
+- `store.get(ctx)` throws a `TypeError` for the context of a CLI defined without this store. `defineStore` throws one for the name `clipact`, which is reserved.
 
 ### Side effects and confirmation
 
@@ -345,7 +394,8 @@ Throw a `CliError` for an expected failure. In strict mode, clipact checks that 
 | `internal_error` | Anything unexpected | `false` |
 | `rate_limited`, `service_unavailable`, `timeout` | Handlers | Default `true` only for `readOnly` or `idempotent` commands |
 | `skill_conflict` | `skills install`, when `skills` is configured (see [Agent skills](#agent-skills)) | `false` |
-| `state_unwritable` | `telemetry enable` and `telemetry disable`, when `telemetry` is configured (see [Telemetry](#telemetry)) | `false` |
+| `state_unwritable` | `ctx.dir()`, store writes, `telemetry enable`, and `telemetry disable` (see [Storage](#storage)) | `false` |
+| `config_invalid` | Reading a store file that is corrupt or fails its schema (see [Storage](#storage)) | `false` |
 | Your codes | Handlers | Default `false` |
 
 An explicit `retryable` always wins. clipact never retries. Handlers and SDKs own request-level retries and backoff, and a handler sets `retryable: true` only when the same command is safe to run again.
@@ -388,9 +438,9 @@ clipact registers its signal listeners with `process.once`, so a second signal e
 | Command | Output |
 | --- | --- |
 | `acme --version` | The version, on stdout |
-| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions. Root help also has an **Environment** section: each [global](#globals), then `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, and, with [telemetry](#telemetry), `<PREFIX>_TELEMETRY`. |
+| `acme --help`, `acme <group> --help` | Every command below that point, with descriptions. Root help also has an **Environment** section: each [global](#globals), then `<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, `<PREFIX>_CONFIG_DIR`, and, with [telemetry](#telemetry), `<PREFIX>_TELEMETRY`. |
 | `acme <command> --help` | Usage, arguments, flags with defaults and variables, secrets, examples, and side effects. With globals, a line points to root help for them. |
-| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], env, globals, result }`. `env` is `{ output, agent, telemetry }`, the framework variable names. `globals` is `{ env, secrets, input }`, as in `schema <command>`, and only appears when the CLI has globals. `env` and `globals` appear only for the root. `result` is the JSON Schema of the result envelope. |
+| `acme schema --list` | `data` is `{ name, version, commands: [{ command, description, readOnly, idempotent, confirm, dryRun }], env, globals, result }`. `env` is `{ output, agent, telemetry, config }`, the framework variable names. `globals` is `{ env, secrets, input }`, as in `schema <command>`, and only appears when the CLI has globals. `env` and `globals` appear only for the root. `result` is the JSON Schema of the result envelope. |
 | `acme schema <command>` | `data` is `{ command, description, examples, positionals, env, secrets, readOnly, idempotent, confirm, dryRun, input, output, errors }`. `input` and `output` are JSON Schema 2020-12, and `output` describes `data`. `errors` maps each code to `{ description, details }`. `confirm` is `null`, `{ when: 'always', reason }`, or `{ when: 'conditional' }`. |
 | `acme completion <bash\|zsh\|fish>` | A shell completion script, on stdout in every mode (see [Shell completions](#shell-completions)) |
 
@@ -536,7 +586,9 @@ The configured CLI gets a `telemetry` group:
 | `acme telemetry enable` | Saves the choice to send events and reports the resulting status, which an environment opt-out may still override. Idempotent. |
 | `acme telemetry disable` | Saves the choice to send nothing. Idempotent. |
 
-`enable` and `disable` return `state_unwritable` when the state file cannot be written. The state file is `state.json` in a directory named after the CLI: `$XDG_STATE_HOME/acme` (default `~/.local/state/acme`) on Linux, `~/Library/Application Support/acme` on macOS, and `%LOCALAPPDATA%\acme` on Windows. It holds the saved choice, whether the notice was shown, and the installation ID. When the file cannot be read or written, as in sandboxes, clipact treats it as empty, shows the notice again, and sends `installId: null`.
+clipact saves the choice, whether the notice was shown, and the installation ID in `clipact.json`, in the CLI's [folder](#storage). `enable` and `disable` return `state_unwritable` when it cannot be written. When it cannot be read or written, as in sandboxes, clipact treats it as empty, shows the notice again, and sends `installId: null`. A corrupt file also reads as empty, and the next write keeps a copy of it as `clipact.invalid-<timestamp>.json`. Writes hold a lock, so parallel first runs save one installation ID.
+
+clipact 0.5 kept this state in `state.json` in the platform state folder. clipact now ignores that file, so each user sees the notice once more and gets a new installation ID.
 
 Each event is a `TelemetryEvent`:
 
@@ -553,7 +605,7 @@ Each event is a `TelemetryEvent`:
 | `env.provider` | The CI or deployment provider, such as `github_actions`, `gitlab`, or `vercel`, from a table copied from [std-env](https://github.com/unjs/std-env/blob/v4.3.0/src/providers.ts). `null` when none is detected. |
 | `env.format` | `json` or `human` |
 | `env.agent`, `env.agentVersion` | The detected or forced agent, and its version when `AI_AGENT` or `AGENT` carries one, such as `2-1-299` |
-| `installId` | A random UUID saved in the state file. `null` in CI, whose home directory rarely outlives the job, and when it cannot be saved. |
+| `installId` | A random UUID saved in `clipact.json`. `null` in CI, whose home directory rarely outlives the job, and when it cannot be saved. |
 
 Events carry no agent session ID or hash, so they cannot be linked into one agent session's sequence of calls.
 
@@ -581,6 +633,7 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | --- | --- | --- |
 | `<PREFIX>_OUTPUT` | `json`, `human` | Default format |
 | `<PREFIX>_AGENT` | `1`, `0`, `true`, `false` | Force or disable agent mode |
+| `<PREFIX>_CONFIG_DIR` | An absolute path | The CLI's [folder](#storage) |
 | [Globals](#globals) | Per the globals schema | CLI-wide settings |
 | `AI_AGENT`, `AGENT`, vendor variables | Any | Agent detection |
 | `CI` | Set, non-empty, and not `0` or `false` | No prompts |
@@ -589,7 +642,7 @@ An input field cannot use a framework flag's name: `json`, `format`, `agent`, `i
 | `CODEX_SANDBOX_NETWORK_DISABLED` | Set, non-empty, and not `0` or `false` | Turn telemetry off, unless `<PREFIX>_TELEMETRY=log` |
 | `NO_COLOR`, `FORCE_COLOR`, `TERM` | Standard | Color in human mode |
 
-`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`. It names only these three variables: globals and command `env` mappings use the names they declare.
+`<PREFIX>` is `envPrefix`, or the CLI name by default, upper-cased with each run of other characters replaced by `_`. For example, `acme` becomes `ACME`. It names only these four variables: globals and command `env` mappings use the names they declare.
 
 ## API reference
 
@@ -611,6 +664,7 @@ Creates a CLI from its command tree.
 | `mapError` | `() => Promise<{ default: MapError }>`? | Lazily imports the error translation hook. |
 | `errors` | `ErrorRegistry?` | Every error code the commands return besides the built-in codes, as `{ [code]: { description, details? } }`, where `details` is a `Schema`. See [Errors](#errors). |
 | `telemetry` | `{ sender: URL \| string, default?: 'on' \| 'off', docs?: string }`? | Sends usage events through the `sender` module and adds the [`telemetry` commands](#telemetry). |
+| `store` | `Store?` | The CLI's store, created by [`defineStore`](#definestoreoptions-store). |
 
 The returned `Cli` has these members:
 
@@ -673,6 +727,7 @@ Pairs a handler with its definition for typing. Default-export the result from t
 | `log(message)` | Writes a line to stderr in any mode. |
 | `checkpoint({ id, next? })` | Prints the job ID now and uses `next` if the command is interrupted. |
 | `telemetry()` | Resolves `{ enabled, optedOut, source, variable? }`. See [Telemetry](#telemetry). |
+| `dir({ create? }?)` | Resolves the CLI's folder, creating it unless `create` is `false`. See [Storage](#storage). |
 | `ok(data, { next? }?)` | Creates the success result. `output` types `data`. Without an output schema, `data` is optional and defaults to `{}`. |
 
 ### `defineGlobals(options): Globals`
@@ -688,6 +743,18 @@ Defines the CLI's [globals](#globals).
 `defineGlobals` throws a `TypeError` for a secret without an `env` mapping. It checks the other field rules when the globals are first read or described, and `assertDefinitions` checks them in tests.
 
 The returned `Globals` has `get(ctx)`, which returns the validated values (`ParsedOf<input>`) for a handler's context.
+
+### `defineStore(options): Store`
+
+Defines the CLI's [store](#storage).
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `schema` | `StandardSchemaV1` | A schema for the whole file, such as a zod object. It needs no JSON Schema. |
+| `defaults` | `object?` | Values for top-level keys missing from the file. Required when the schema has a required field without a default. |
+| `name` | `string?` | The file name without `.json`. Defaults to `config`. `clipact` is reserved. |
+
+The returned `Store` has `get(ctx)`, which resolves an iso-conf `Conf` for a handler's context. See the [iso-conf API](https://github.com/hugomrdias/iso-repo/tree/main/packages/iso-conf#usage) for `get`, `set`, `update`, and the rest.
 
 ### `CliError`
 
@@ -721,7 +788,7 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 | `InputIssue` | `{ path, message, source?, expected? }`, the items of `invalid_input` details. `expected` lists the accepted values: a group's commands or an enum's members. |
 | `InputOf<S>`, `ParsedOf<S>`, `DataOf<S>` | Input before parsing, input after parsing, and handler data for a schema. |
 | `TelemetryEvent`, `TelemetryEnv`, `TelemetrySender`, `TelemetryOptions`, `TelemetryStatus` | The event, its `env` block, the sender module's default export, the `telemetry` option, and the status. See [Telemetry](#telemetry). |
-| `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Globals`, `GlobalsOptions`, `AnyGlobals`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
+| `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Globals`, `GlobalsOptions`, `AnyGlobals`, `Store`, `StoreOptions`, `AnyStore`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
 
 ## Testing API
 
@@ -794,4 +861,4 @@ Run the type check, the tests, and Biome:
 pnpm --filter clipact check
 ```
 
-The tests in `test/` run a fixture CLI from `test/fixtures`, both in process and as a real process. They cover results, validation, secrets, `--input`, confirmation, errors, modes, discovery, signals, and crashes.
+The tests in `test/` run a fixture CLI from `test/fixtures`, both in process and as a real process. They cover results, validation, secrets, `--input`, confirmation, errors, modes, discovery, storage, signals, and crashes.

@@ -4,6 +4,7 @@ import type {
 } from '@standard-schema/spec'
 import type { CliError, ErrorRegistry, Next } from './errors.ts'
 import type { AnyGlobals } from './globals.ts'
+import type { AnyStore } from './storage.ts'
 
 /**
  * A schema that validates and exports JSON Schema, such as a zod v4 schema.
@@ -164,6 +165,16 @@ export interface Context<
    * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
    */
   telemetry(): Promise<TelemetryStatus>
+  /**
+   * Returns the CLI's folder, where `clipact.json` and the CLI's store live
+   * and where the CLI may add its own files. Creates it with mode `0700` on
+   * the first call unless `create` is `false`. Throws `state_unwritable` when
+   * there is no folder or it cannot be created; declare that code in the
+   * command's `errors`.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+   */
+  dir(options?: { create?: boolean }): Promise<string>
   /** Creates the successful result; `data` defaults to `{}`. */
   ok(
     ...args: O extends Schema
@@ -226,7 +237,7 @@ export interface TelemetryEvent {
   durationMs: number
   /** Where and how the command ran. */
   env: TelemetryEnv
-  /** Random ID stored in the state file; `null` in CI and when it cannot be saved. */
+  /** Random ID stored in `clipact.json`; `null` in CI and when it cannot be saved. */
   installId: string | null
 }
 
@@ -286,7 +297,7 @@ export interface CliOptions {
   name: string
   version: string
   description?: string
-  /** Prefix of framework variables (`<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`); defaults to the name. Not applied to `globals` or command `env` names. */
+  /** Prefix of framework variables (`<PREFIX>_OUTPUT`, `<PREFIX>_AGENT`, `<PREFIX>_CONFIG_DIR`); defaults to the name. Not applied to `globals` or command `env` names. */
   envPrefix?: string
   /**
    * CLI-wide settings read only from environment variables, created by
@@ -318,6 +329,13 @@ export interface CliOptions {
    * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#telemetry
    */
   telemetry?: TelemetryOptions
+  /**
+   * A JSON file in the CLI's folder for what the CLI saves between runs,
+   * created by `defineStore`. Handlers open it with `await store.get(ctx)`.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+   */
+  store?: AnyStore
 }
 
 /**

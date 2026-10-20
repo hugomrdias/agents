@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import type { StandardSchemaV1 } from '@standard-schema/spec'
 import { type Env, identifyAgent, isSet } from './agent.ts'
 import {
   type CliOptions,
@@ -13,11 +13,12 @@ import {
   type TelemetryEvent,
   type TelemetryStatus,
 } from './define.ts'
-import { CliError } from './errors.ts'
+import { frameworkVariables } from './mode.ts'
 import { detectProvider } from './provider.ts'
 import { FRAMEWORK_FLAGS } from './route.ts'
 import type { Session } from './session.ts'
 import type { CommandSpec } from './spec.ts'
+import { CLIPACT_FILE, ensureDir, noDir, unwritable } from './storage.ts'
 import { type TelemetryCommand, telemetryContexts } from './telemetry.ts'
 
 /** The variable that carries the event to the sender process. */
@@ -26,7 +27,7 @@ export const EVENT_VARIABLE = 'CLIPACT_TELEMETRY_EVENT'
 /** How long the sender process may run before it exits. */
 export const SENDER_TIMEOUT_MS = 10_000
 
-/** The framework state file's content. */
+/** The content of `clipact.json`, clipact's own file in the CLI's folder. */
 export interface State {
   /** The choice saved by `telemetry enable` or `telemetry disable`. */
   telemetry?: 'enabled' | 'disabled'
@@ -40,77 +41,82 @@ export interface ResolvedTelemetry {
   status: TelemetryStatus
   /** `<PREFIX>_TELEMETRY=log`: print events to stderr instead of sending them. */
   log: boolean
-  /** The state file, or `undefined` when there is no state directory. */
-  file: string | undefined
-  /** The state read from `file`; empty when it is missing or unreadable. */
+  /** The CLI's folder, or `undefined` when there is none. */
+  dir: string | undefined
+  /** The state read from `clipact.json`; empty when it is missing or unreadable. */
   state: State
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
- * Returns the CLI's state file in the platform state directory, or
- * `undefined` when the environment names no home directory.
+ * A Standard Schema for `clipact.json` that keeps only valid fields and
+ * never fails, so a hand-edited file loses a bad field instead of the rest.
  *
- * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+ * @see https://standardschema.dev
  */
-export function stateFile(
-  name: string,
-  env: Env,
-  platform: NodeJS.Platform = process.platform
-): string | undefined {
-  let directory: string | undefined
-  if (platform === 'win32') {
-    directory = env.LOCALAPPDATA && join(env.LOCALAPPDATA, name)
-  } else if (platform === 'darwin') {
-    directory =
-      env.HOME && join(env.HOME, 'Library', 'Application Support', name)
-  } else if (env.XDG_STATE_HOME && isAbsolute(env.XDG_STATE_HOME)) {
-    directory = join(env.XDG_STATE_HOME, name)
-  } else {
-    directory = env.HOME && join(env.HOME, '.local', 'state', name)
-  }
-  return directory ? join(directory, 'state.json') : undefined
+const stateSchema: StandardSchemaV1<unknown, State> = {
+  '~standard': {
+    version: 1,
+    vendor: 'clipact',
+    validate(value) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return { value: {} }
+      }
+      const { telemetry, notice, installId } = value as Record<string, unknown>
+      return {
+        value: {
+          ...(telemetry === 'enabled' || telemetry === 'disabled'
+            ? { telemetry }
+            : {}),
+          ...(notice === true ? { notice } : {}),
+          ...(typeof installId === 'string' && UUID.test(installId)
+            ? { installId }
+            : {}),
+        },
+      }
+    },
+  },
 }
 
-/** Reads the state file, keeping only valid fields; returns `{}` on any failure. */
-export async function readState(file: string): Promise<State> {
+/**
+ * Opens `clipact.json` in a folder with iso-conf. A corrupt file reads as
+ * empty, and the next write keeps a copy of it before replacing it. Each
+ * write holds a lock, so parallel runs agree on one installation ID.
+ *
+ * @see https://github.com/hugomrdias/iso-repo/tree/main/packages/iso-conf
+ */
+async function openState(dir: string) {
+  const { Conf } = await import('iso-conf')
+  return new Conf({
+    cwd: dir,
+    configName: CLIPACT_FILE,
+    schema: stateSchema,
+    clearInvalidConfig: true,
+    lock: true,
+  })
+}
+
+/** Reads `clipact.json` in a folder; returns `{}` on any failure. Never writes. */
+export async function readState(dir: string): Promise<State> {
   try {
-    const value: unknown = JSON.parse(await readFile(file, 'utf8'))
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return {}
-    }
-    const { telemetry, notice, installId } = value as Record<string, unknown>
-    return {
-      ...(telemetry === 'enabled' || telemetry === 'disabled'
-        ? { telemetry }
-        : {}),
-      ...(notice === true ? { notice } : {}),
-      ...(typeof installId === 'string' && UUID.test(installId)
-        ? { installId }
-        : {}),
-    }
+    return { ...(await openState(dir)).store }
   } catch {
     return {}
   }
 }
 
 /**
- * Writes the state file through a temporary file, creating its directory.
- * Removes the temporary file when the write or the rename fails.
+ * Changes `clipact.json` in a folder under its lock, creating the folder
+ * first, and returns the saved state. Throws when it cannot be written.
  */
-export async function writeState(file: string, state: State): Promise<void> {
-  await mkdir(dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.tmp`
-  try {
-    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
-      mode: 0o600,
-    })
-    await rename(temporary, file)
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined)
-    throw error
-  }
+export async function updateState(
+  dir: string,
+  change: (state: State) => State
+): Promise<State> {
+  await ensureDir(dir)
+  const conf = await openState(dir)
+  return { ...conf.update((state) => change({ ...state })) }
 }
 
 /**
@@ -119,7 +125,7 @@ export async function writeState(file: string, state: State): Promise<void> {
  * network, `CODEX_SANDBOX_NETWORK_DISABLED`, turns it off unless
  * `<PREFIX>_TELEMETRY=log` only prints events. Then `<PREFIX>_TELEMETRY=1`
  * or `log`, the saved `enable`, and the CLI's default. Without a `telemetry`
- * option, it reads only the environment opt-outs and never the state file.
+ * option, it reads only the environment opt-outs and never `clipact.json`.
  *
  * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/guidelines.md#opting-out
  */
@@ -127,7 +133,7 @@ export async function resolveTelemetry(
   cli: CliOptions,
   envPrefix: string,
   env: Env,
-  platform: NodeJS.Platform = process.platform
+  dir: string | undefined
 ): Promise<ResolvedTelemetry> {
   const variable = `${envPrefix}_TELEMETRY`
   const raw = env[variable]
@@ -145,16 +151,15 @@ export async function resolveTelemetry(
         ...(optOut ? { variable: optOut } : {}),
       },
       log: false,
-      file: undefined,
+      dir,
       state: {},
     }
   }
-  const file = stateFile(cli.name, env, platform)
-  const state = file ? await readState(file) : {}
+  const state = dir ? await readState(dir) : {}
   const resolved = (status: TelemetryStatus, log = false) => ({
     status,
     log,
-    file,
+    dir,
     state,
   })
   if (optOut) {
@@ -283,9 +288,10 @@ export async function report(input: ReportInput): Promise<void> {
 /**
  * Shows the first-run notice and creates the installation ID, saving both.
  * A saved `enable` or `disable` counts as having seen the notice. The file
- * is read again before writing, so a choice saved while the command ran is
- * kept. Returns the installation ID, or `null` in CI, whose home directory
- * rarely survives the job, and when it cannot be saved.
+ * is read again under its lock before writing, so a choice saved while the
+ * command ran is kept and parallel first runs keep one ID. Returns the
+ * installation ID, or `null` in CI, whose home directory rarely survives the
+ * job, and when it cannot be saved.
  */
 async function persist(
   cli: CliOptions,
@@ -293,7 +299,7 @@ async function persist(
   session: Session,
   ci: boolean
 ): Promise<string | null> {
-  const { file, state } = resolved
+  const { dir, state } = resolved
   const updates: State = {}
   if (!state.notice && !state.telemetry) {
     session.log(notice(cli))
@@ -302,24 +308,24 @@ async function persist(
   if (!state.installId && !ci) {
     updates.installId = randomUUID()
   }
-  if (!file) {
+  if (!dir) {
     return null
   }
   if (updates.notice || updates.installId) {
     try {
-      const current = await readState(file)
-      const installId = current.installId ?? updates.installId
-      const next: State = {
-        ...current,
-        ...(updates.notice ? { notice: true } : {}),
-        ...(installId ? { installId } : {}),
-      }
-      await writeState(file, next)
-      Object.assign(state, next)
+      const saved = await updateState(dir, (current) => {
+        const installId = current.installId ?? updates.installId
+        return {
+          ...current,
+          ...(updates.notice ? { notice: true } : {}),
+          ...(installId ? { installId } : {}),
+        }
+      })
+      Object.assign(state, saved)
     } catch (error) {
       if (session.debug) {
         session.log(
-          `debug: cannot save ${file}: ${error instanceof Error ? error.message : String(error)}`
+          `debug: cannot save ${join(dir, `${CLIPACT_FILE}.json`)}: ${error instanceof Error ? error.message : String(error)}`
         )
       }
     }
@@ -452,28 +458,16 @@ export function saveHandler(
     if (!context) {
       throw new TypeError('telemetry commands need a context from clipact')
     }
-    const { env, envPrefix } = context
-    const file = stateFile(cli.name, env)
-    if (!file) {
-      throw new CliError({
-        code: 'state_unwritable',
-        message: `Cannot find a state directory: set ${process.platform === 'win32' ? 'LOCALAPPDATA' : 'HOME'}.`,
-        retryable: false,
-        details: {},
-      })
+    const { env, envPrefix, dir } = context
+    if (!dir) {
+      throw noDir(frameworkVariables(envPrefix).config)
     }
     try {
-      await writeState(file, { ...(await readState(file)), telemetry: choice })
+      await updateState(dir, (state) => ({ ...state, telemetry: choice }))
     } catch (error) {
-      throw new CliError({
-        code: 'state_unwritable',
-        message: `Cannot write ${file}.`,
-        retryable: false,
-        details: { path: file },
-        cause: error,
-      })
+      throw unwritable(join(dir, `${CLIPACT_FILE}.json`), error)
     }
-    const { status } = await resolveTelemetry(cli, envPrefix, env)
+    const { status } = await resolveTelemetry(cli, envPrefix, env, dir)
     return ctx.ok(status)
   })
 }

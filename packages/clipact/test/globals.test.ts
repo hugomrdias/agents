@@ -237,6 +237,18 @@ describe('globals', () => {
     )
   })
 
+  test('defineCli rejects a global that uses <PREFIX>_CONFIG_DIR', () => {
+    const clash = defineGlobals({
+      input: z.object({ configDir: z.string().optional() }),
+      env: { configDir: 'ACME_CONFIG_DIR' },
+    })
+    assert.throws(
+      () =>
+        defineCli({ name: 'acme', version: '1', globals: clash, commands: [] }),
+      /Global variable ACME_CONFIG_DIR clashes with a framework variable/
+    )
+  })
+
   test('defineCli rejects a global that uses <PREFIX>_TELEMETRY', () => {
     const clash = defineGlobals({
       input: z.object({ telemetry: z.string().optional() }),
@@ -303,6 +315,7 @@ describe('globals help and discovery', () => {
       output: 'ACME_OUTPUT',
       agent: 'ACME_AGENT',
       telemetry: 'ACME_TELEMETRY',
+      config: 'ACME_CONFIG_DIR',
     })
     const block = data.globals as {
       env: Record<string, string>
