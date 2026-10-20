@@ -317,7 +317,15 @@ The folder holds three kinds of files:
 - `config.json`, the CLI's store, when it defines one.
 - Any file the CLI adds itself, such as a database.
 
-`await ctx.dir()` returns the folder, creating it with mode `0700` on the first call, because it may hold credentials. `await ctx.dir({ create: false })` returns the path without creating anything, such as for a `doctor` command. Both throw `state_unwritable` when there is no folder, with neither `HOME` (`LOCALAPPDATA` on Windows) nor `<PREFIX>_CONFIG_DIR` set, and `ctx.dir()` also throws it when the folder cannot be created. Nothing creates the folder until a command needs it, so `--help`, `schema`, and `telemetry status` work in read-only sandboxes.
+`await ctx.dir()` returns the folder, creating it with mode `0700` on the first call, because it may hold credentials. `await ctx.dir({ create: false })` returns the path without creating anything. Both throw `state_unwritable` when there is no folder, with neither `HOME` (`LOCALAPPDATA` on Windows) nor `<PREFIX>_CONFIG_DIR` set, and `ctx.dir()` also throws it when the folder cannot be created. Nothing creates the folder until a command needs it, so `--help`, `schema`, and `telemetry status` work in read-only sandboxes.
+
+`await ctx.storage()` reports where the folder is and what decided it, such as for a `doctor` command. It reads the invocation's environment, so tests that pass `env` to `invoke` get the same answer, and it never touches the disk or throws:
+
+| Field | Value |
+| --- | --- |
+| `dir` | The folder, or `undefined` when there is none. |
+| `source` | `env` when `<PREFIX>_CONFIG_DIR` set the folder, otherwise `default`. |
+| `variable` | `<PREFIX>_CONFIG_DIR` for `env`, `XDG_DATA_HOME` when it set the default, and absent otherwise. |
 
 For settings and state the CLI saves, such as a login or a default network, define a store. It is one JSON file read and written with [iso-conf](https://github.com/hugomrdias/iso-repo/tree/main/packages/iso-conf):
 
@@ -728,6 +736,7 @@ Pairs a handler with its definition for typing. Default-export the result from t
 | `checkpoint({ id, next? })` | Prints the job ID now and uses `next` if the command is interrupted. |
 | `telemetry()` | Resolves `{ enabled, optedOut, source, variable? }`. See [Telemetry](#telemetry). |
 | `dir({ create? }?)` | Resolves the CLI's folder, creating it unless `create` is `false`. See [Storage](#storage). |
+| `storage()` | Resolves `{ dir, source, variable? }` without touching the disk. See [Storage](#storage). |
 | `ok(data, { next? }?)` | Creates the success result. `output` types `data`. Without an output schema, `data` is optional and defaults to `{}`. |
 
 ### `defineGlobals(options): Globals`
@@ -788,6 +797,7 @@ new CliError({ code, message, retryable?, retryAfterSeconds?, details?, next?, c
 | `InputIssue` | `{ path, message, source?, expected? }`, the items of `invalid_input` details. `expected` lists the accepted values: a group's commands or an enum's members. |
 | `InputOf<S>`, `ParsedOf<S>`, `DataOf<S>` | Input before parsing, input after parsing, and handler data for a schema. |
 | `TelemetryEvent`, `TelemetryEnv`, `TelemetrySender`, `TelemetryOptions`, `TelemetryStatus` | The event, its `env` block, the sender module's default export, the `telemetry` option, and the status. See [Telemetry](#telemetry). |
+| `StorageStatus` | `{ dir, source, variable? }`, as `ctx.storage()` returns it. See [Storage](#storage). |
 | `Command`, `AnyCommand`, `Group`, `CommandNode`, `CommandOptions`, `CliOptions`, `Context`, `Handler`, `Ok`, `Mode`, `ProgressEvent`, `Checkpoint`, `Globals`, `GlobalsOptions`, `AnyGlobals`, `Store`, `StoreOptions`, `AnyStore`, `Schema`, `Io`, `OutputStream`, `Env`, `Outcome`, `ExecuteOptions` | Types used above. |
 
 ## Testing API

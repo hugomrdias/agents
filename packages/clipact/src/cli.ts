@@ -178,7 +178,7 @@ export function defineCli(definition: CliOptions): Cli {
     const flags = scanGlobalFlags(args)
     const { mode, issues } = resolveMode(flags, io, envPrefix)
     const variable = frameworkVariables(envPrefix).config
-    const { dir, issues: dirIssues } = resolveDir(
+    const { issues: dirIssues, ...status } = resolveDir(
       options.name,
       variable,
       io.env
@@ -199,7 +199,7 @@ export function defineCli(definition: CliOptions): Cli {
       strict: executeOptions.strict === true,
       errors,
       envPrefix,
-      storage: { dir, variable, store: options.store },
+      storage: { status, variable, store: options.store },
       telemetryCommands,
       started,
     })
@@ -397,7 +397,7 @@ class Invocation {
         error = mapFailure
       }
     }
-    cliError ??= storageError(error, this.#state.storage.dir)
+    cliError ??= storageError(error, this.#state.storage.status.dir)
     if (!cliError) {
       if (session.debug && error instanceof Error && error.stack) {
         session.log(error.stack)
@@ -499,11 +499,12 @@ class Invocation {
       ok: (data, options) => createOk(data ?? {}, options?.next),
       telemetry: async () => ({ ...(await this.#resolveTelemetry()).status }),
       dir: (options) => contextDir(storage, options?.create !== false),
+      storage: async () => ({ ...storage.status }),
     }
     telemetryContexts.set(context, {
       env: io.env,
       envPrefix: this.#state.envPrefix,
-      dir: storage.dir,
+      dir: storage.status.dir,
     })
     bindStorage(context, storage)
     if (cli.globals && globals) {
@@ -595,7 +596,7 @@ class Invocation {
   #resolveTelemetry(): Promise<ResolvedTelemetry> {
     const { cli, envPrefix, io, storage } = this.#state
     this.#telemetry ??= import('./telemetry.run.ts').then((run) =>
-      run.resolveTelemetry(cli, envPrefix, io.env, storage.dir)
+      run.resolveTelemetry(cli, envPrefix, io.env, storage.status.dir)
     )
     return this.#telemetry
   }

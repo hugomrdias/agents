@@ -2,7 +2,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { Conf } from 'iso-conf'
 import type { Env } from './agent.ts'
-import type { Context } from './define.ts'
+import type { Context, StorageStatus } from './define.ts'
 import { CliError, type InputIssue } from './errors.ts'
 
 /** The configuration name of clipact's own file, `clipact.json`, in the CLI's folder. */
@@ -42,16 +42,33 @@ export function defaultDir(
       ? join(env.HOME, 'Library', 'Application Support', name)
       : undefined
   }
-  if (env.XDG_DATA_HOME && isAbsolute(env.XDG_DATA_HOME)) {
-    return join(env.XDG_DATA_HOME, name)
+  const data = xdgDataHome(env, platform)
+  if (data) {
+    return join(data, name)
   }
   return env.HOME ? join(env.HOME, '.local', 'share', name) : undefined
 }
 
-/** The CLI's folder for one invocation, and the problem with its variable, if any. */
-export interface ResolvedDir {
-  /** The folder, or `undefined` when there is none or its variable is invalid. */
-  dir: string | undefined
+/**
+ * Returns `XDG_DATA_HOME` when it decides the default folder: outside macOS
+ * and Windows, and only when it is absolute.
+ *
+ * @see https://specifications.freedesktop.org/basedir-spec/latest/
+ */
+function xdgDataHome(env: Env, platform: NodeJS.Platform): string | undefined {
+  if (platform === 'win32' || platform === 'darwin') {
+    return undefined
+  }
+  const value = env.XDG_DATA_HOME
+  return value && isAbsolute(value) ? value : undefined
+}
+
+/**
+ * The CLI's folder for one invocation, what decided it, and the problem with
+ * its variable, if any. `dir` is `undefined` when there is no folder or the
+ * variable is invalid.
+ */
+export interface ResolvedDir extends StorageStatus {
   issues: InputIssue[]
 }
 
@@ -69,11 +86,19 @@ export function resolveDir(
 ): ResolvedDir {
   const value = env[variable]
   if (!value) {
-    return { dir: defaultDir(name, env, platform), issues: [] }
+    const data = xdgDataHome(env, platform)
+    return {
+      dir: defaultDir(name, env, platform),
+      source: 'default',
+      ...(data ? { variable: 'XDG_DATA_HOME' } : {}),
+      issues: [],
+    }
   }
   if (!isAbsolute(value)) {
     return {
       dir: undefined,
+      source: 'env',
+      variable,
       issues: [
         {
           path: variable,
@@ -83,7 +108,7 @@ export function resolveDir(
       ],
     }
   }
-  return { dir: value, issues: [] }
+  return { dir: value, source: 'env', variable, issues: [] }
 }
 
 /**
@@ -169,8 +194,8 @@ export function storageError(
 
 /** Access to the CLI's folder from a handler context. */
 export interface StorageAccess {
-  /** The folder, or `undefined` when there is none. */
-  dir: string | undefined
+  /** The folder, or `undefined` when there is none, and what decided it. */
+  status: StorageStatus
   /** The framework variable that overrides it, such as `ACME_CONFIG_DIR`. */
   variable: string
   /** The CLI's store, if it defines one. */
@@ -194,7 +219,8 @@ export async function contextDir(
   access: StorageAccess,
   create = true
 ): Promise<string> {
-  const { dir, variable } = access
+  const { status, variable } = access
+  const { dir } = status
   if (!dir) {
     throw noDir(variable)
   }
