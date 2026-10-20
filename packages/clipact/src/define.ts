@@ -175,6 +175,14 @@ export interface Context<
    * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
    */
   dir(options?: { create?: boolean }): Promise<string>
+  /**
+   * Resolves where the CLI's folder is and what decided it, such as for a
+   * `doctor` command. Never touches the disk and never throws: `dir` is
+   * `undefined` when there is no folder.
+   *
+   * @see https://github.com/hugomrdias/agents/blob/main/docs/agent-cli/framework-design.md#runtime-services
+   */
+  storage(): Promise<StorageStatus>
   /** Creates the successful result; `data` defaults to `{}`. */
   ok(
     ...args: O extends Schema
@@ -211,6 +219,21 @@ export interface TelemetryStatus {
   /** What decided `enabled`; `unconfigured` when the CLI has no `telemetry` option. */
   source: 'env' | 'config' | 'default' | 'unconfigured'
   /** The environment variable behind the answer, if any. */
+  variable?: string
+}
+
+/**
+ * Where the CLI's folder is and what decided it, as reported by
+ * `ctx.storage()`.
+ *
+ * @see https://github.com/hugomrdias/agents/blob/main/packages/clipact/README.md#storage
+ */
+export interface StorageStatus {
+  /** The folder, or `undefined` when neither the variable nor the platform default gives one. */
+  dir: string | undefined
+  /** `env` when `<PREFIX>_CONFIG_DIR` set the folder, otherwise `default`. */
+  source: 'env' | 'default'
+  /** `<PREFIX>_CONFIG_DIR` for `env`, or `XDG_DATA_HOME` when it set the default on Linux and other systems. */
   variable?: string
 }
 

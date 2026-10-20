@@ -77,10 +77,22 @@ const show: Command<undefined, undefined> = defineCommand({
   }),
 })
 
+/** Reports where the CLI's folder is and what decided it. */
+const doctor: Command<undefined, undefined> = defineCommand({
+  name: 'doctor',
+  description: "Report the CLI's folder",
+  readOnly: true,
+  handler: async () => ({
+    default: defineHandler(doctor, async (ctx) =>
+      ctx.ok({ ...(await ctx.storage()) })
+    ),
+  }),
+})
+
 const cli = defineCli({
   name: 'acme',
   version: '1.0.0',
-  commands: [where, save, show],
+  commands: [where, save, show, doctor],
   store,
 })
 
@@ -152,7 +164,7 @@ describe('folder resolution', () => {
         { HOME: '/h', ACME_CONFIG_DIR: '/c' },
         'linux'
       ),
-      { dir: '/c', issues: [] }
+      { dir: '/c', source: 'env', variable: 'ACME_CONFIG_DIR', issues: [] }
     )
     assert.deepEqual(
       resolveDir(
@@ -161,7 +173,31 @@ describe('folder resolution', () => {
         { HOME: '/h', ACME_CONFIG_DIR: '' },
         'linux'
       ),
-      { dir: '/h/.local/share/acme', issues: [] }
+      { dir: '/h/.local/share/acme', source: 'default', issues: [] }
+    )
+  })
+
+  test('names XDG_DATA_HOME when it decides the default on Linux', () => {
+    const vars = { HOME: '/h', XDG_DATA_HOME: '/x' }
+    assert.deepEqual(resolveDir('acme', 'ACME_CONFIG_DIR', vars, 'linux'), {
+      dir: '/x/acme',
+      source: 'default',
+      variable: 'XDG_DATA_HOME',
+      issues: [],
+    })
+    assert.deepEqual(resolveDir('acme', 'ACME_CONFIG_DIR', vars, 'darwin'), {
+      dir: '/h/Library/Application Support/acme',
+      source: 'default',
+      issues: [],
+    })
+    assert.deepEqual(
+      resolveDir(
+        'acme',
+        'ACME_CONFIG_DIR',
+        { HOME: '/h', XDG_DATA_HOME: 'relative' },
+        'linux'
+      ),
+      { dir: '/h/.local/share/acme', source: 'default', issues: [] }
     )
   })
 
@@ -235,6 +271,35 @@ describe('ctx.dir()', () => {
     } finally {
       await chmod(locked, 0o700)
     }
+  })
+})
+
+describe('ctx.storage()', () => {
+  test('reports <PREFIX>_CONFIG_DIR from the invocation env', async () => {
+    const custom = join(home, 'custom')
+    const result = await run(['doctor', '--json'], { ACME_CONFIG_DIR: custom })
+    assert.deepEqual(result.data, {
+      dir: custom,
+      source: 'env',
+      variable: 'ACME_CONFIG_DIR',
+    })
+    await assert.rejects(stat(custom), { code: 'ENOENT' })
+  })
+
+  test('reports the platform default without creating it', async () => {
+    const result = await run(['doctor', '--json'])
+    const linux = process.platform !== 'darwin' && process.platform !== 'win32'
+    assert.deepEqual(result.data, {
+      dir: dir(),
+      source: 'default',
+      ...(linux ? { variable: 'XDG_DATA_HOME' } : {}),
+    })
+    await assert.rejects(stat(dir()), { code: 'ENOENT' })
+  })
+
+  test('reports no folder without a home folder', async () => {
+    const result = assertContract(await invoke(cli, ['doctor', '--json'], {}))
+    assert.deepEqual(result.data, { source: 'default' })
   })
 })
 

@@ -26,6 +26,7 @@ export {
   type ParsedOf,
   type ProgressEvent,
   type Schema,
+  type StorageStatus,
   type TelemetryEnv,
   type TelemetryEvent,
   type TelemetryOptions,
