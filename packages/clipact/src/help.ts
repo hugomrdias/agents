@@ -121,9 +121,15 @@ function environmentRows(cli: CliOptions): [string, string][] {
       ])
     }
   }
-  const { output, agent, telemetry } = frameworkVariables(resolveEnvPrefix(cli))
+  const { output, agent, telemetry, config } = frameworkVariables(
+    resolveEnvPrefix(cli)
+  )
   rows.push([output, 'Default output format: json or human'])
   rows.push([agent, 'Force or disable agent mode: 1, 0, true, or false'])
+  rows.push([
+    config,
+    "Absolute path of this CLI's folder for its settings and state (default: the platform data folder)",
+  ])
   if (cli.telemetry) {
     rows.push([
       telemetry,

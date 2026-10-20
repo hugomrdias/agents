@@ -7,7 +7,7 @@ import {
   readFile,
   writeFile,
 } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { beforeEach, describe, test } from 'node:test'
@@ -23,12 +23,12 @@ import {
 } from '../src/index.ts'
 import { detectProvider } from '../src/provider.ts'
 import { resolveSpec } from '../src/spec.ts'
+import { defaultDir } from '../src/storage.ts'
 import {
   flagNames,
   readState,
   resolveTelemetry,
-  stateFile,
-  writeState,
+  updateState,
 } from '../src/telemetry.run.ts'
 import { assertContract, assertDefinitions, invoke } from '../src/testing.ts'
 import { cli as base } from './fixtures/cli.ts'
@@ -77,12 +77,17 @@ let env: Env = {}
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'clipact-telemetry-'))
-  env = { HOME: home, XDG_STATE_HOME: join(home, 'state') }
+  env = { HOME: home, XDG_DATA_HOME: join(home, 'data') }
 })
 
-/** The state file the CLI uses under the test home directory. */
+/** The CLI's folder under the test home directory. */
+function dir(): string {
+  return defaultDir('acme', env) as string
+}
+
+/** clipact's own file in the CLI's folder. */
 function file(): string {
-  return stateFile('acme', env) as string
+  return join(dir(), 'clipact.json')
 }
 
 describe('telemetry status resolution', () => {
@@ -93,7 +98,8 @@ describe('telemetry status resolution', () => {
       await mkdir(join(target, '..'), { recursive: true })
       await writeFile(target, JSON.stringify(state))
     }
-    return (await resolveTelemetry(options, 'ACME', { ...env, ...vars })).status
+    return (await resolveTelemetry(options, 'ACME', { ...env, ...vars }, dir()))
+      .status
   }
 
   test('defaults to on', async () => {
@@ -143,21 +149,23 @@ describe('telemetry status resolution', () => {
 
   test('<PREFIX>_TELEMETRY=1 and a saved enable override default off', async () => {
     const options = withTelemetry({ sender, default: 'off' }).options
-    const off = await resolveTelemetry(options, 'ACME', env)
+    const off = await resolveTelemetry(options, 'ACME', env, dir())
     assert.deepEqual(off.status, {
       enabled: false,
       optedOut: false,
       source: 'default',
     })
-    const forced = await resolveTelemetry(options, 'ACME', {
-      ...env,
-      ACME_TELEMETRY: '1',
-    })
+    const forced = await resolveTelemetry(
+      options,
+      'ACME',
+      { ...env, ACME_TELEMETRY: '1' },
+      dir()
+    )
     assert.equal(forced.status.enabled, true)
     assert.equal(forced.status.source, 'env')
     await mkdir(join(file(), '..'), { recursive: true })
     await writeFile(file(), JSON.stringify({ telemetry: 'enabled' }))
-    const saved = await resolveTelemetry(options, 'ACME', env)
+    const saved = await resolveTelemetry(options, 'ACME', env, dir())
     assert.deepEqual(saved.status, {
       enabled: true,
       optedOut: false,
@@ -166,22 +174,30 @@ describe('telemetry status resolution', () => {
   })
 
   test('<PREFIX>_TELEMETRY=log is on and logs', async () => {
-    const resolved = await resolveTelemetry(options, 'ACME', {
-      ...env,
-      ACME_TELEMETRY: 'log',
-    })
+    const resolved = await resolveTelemetry(
+      options,
+      'ACME',
+      { ...env, ACME_TELEMETRY: 'log' },
+      dir()
+    )
     assert.equal(resolved.status.enabled, true)
     assert.equal(resolved.log, true)
   })
 
   test('without a telemetry option, only the environment opt-outs count', async () => {
     assert.deepEqual(
-      (await resolveTelemetry(base.options, 'ACME', env)).status,
+      (await resolveTelemetry(base.options, 'ACME', env, dir())).status,
       { enabled: false, optedOut: false, source: 'unconfigured' }
     )
     assert.deepEqual(
-      (await resolveTelemetry(base.options, 'ACME', { DO_NOT_TRACK: '1' }))
-        .status,
+      (
+        await resolveTelemetry(
+          base.options,
+          'ACME',
+          { DO_NOT_TRACK: '1' },
+          undefined
+        )
+      ).status,
       {
         enabled: false,
         optedOut: true,
@@ -191,35 +207,35 @@ describe('telemetry status resolution', () => {
     )
   })
 
-  test('a corrupt state file reads as empty', async () => {
-    await mkdir(join(file(), '..'), { recursive: true })
+  test('a corrupt clipact.json reads as empty and is kept aside on the next write', async () => {
+    await mkdir(dir(), { recursive: true })
     await writeFile(file(), '{not json')
-    assert.deepEqual(await readState(file()), {})
+    assert.deepEqual(await readState(dir()), {})
+    assert.deepEqual(await readdir(dir()), ['clipact.json'])
+    await updateState(dir(), (state) => ({ ...state, notice: true }))
+    assert.deepEqual(JSON.parse(await readFile(file(), 'utf8')), {
+      notice: true,
+    })
+    const names = await readdir(dir())
+    assert.ok(names.some((name) => name.startsWith('clipact.invalid-')))
+  })
+
+  test('invalid fields are dropped and the rest is kept', async () => {
+    await mkdir(dir(), { recursive: true })
+    await writeFile(
+      file(),
+      JSON.stringify({ telemetry: 'maybe', notice: true, installId: 'x' })
+    )
+    assert.deepEqual(await readState(dir()), { notice: true })
+  })
+
+  test('reading never creates the folder', async () => {
+    assert.deepEqual(await readState(dir()), {})
+    await assert.rejects(readdir(dir()), { code: 'ENOENT' })
   })
 })
 
 describe('telemetry helpers', () => {
-  test('the state file follows the platform state directory', () => {
-    assert.equal(
-      stateFile('acme', { HOME: '/h' }, 'linux'),
-      '/h/.local/state/acme/state.json'
-    )
-    assert.equal(
-      stateFile('acme', { HOME: '/h', XDG_STATE_HOME: '/x' }, 'linux'),
-      '/x/acme/state.json'
-    )
-    assert.equal(
-      stateFile('acme', { HOME: '/h', XDG_STATE_HOME: 'relative' }, 'linux'),
-      '/h/.local/state/acme/state.json'
-    )
-    assert.equal(
-      stateFile('acme', { HOME: '/h' }, 'darwin'),
-      '/h/Library/Application Support/acme/state.json'
-    )
-    assert.equal(stateFile('acme', {}, 'linux'), undefined)
-    assert.equal(stateFile('acme', { HOME: '/h' }, 'win32'), undefined)
-  })
-
   test('flag names keep known names only, without values', () => {
     const spec = undefined
     assert.deepEqual(
@@ -251,11 +267,12 @@ describe('telemetry helpers', () => {
     )
   })
 
-  test('writeState removes its temporary file when the write fails', async () => {
-    const target = join(home, 'taken', 'state.json')
-    await mkdir(target, { recursive: true })
-    await assert.rejects(writeState(target, { notice: true }))
-    assert.deepEqual(await readdir(dirname(target)), ['state.json'])
+  test('updateState fails and leaves no file behind when clipact.json is a folder', async () => {
+    await mkdir(file(), { recursive: true })
+    await assert.rejects(
+      updateState(dir(), (state) => ({ ...state, notice: true }))
+    )
+    assert.deepEqual(await readdir(dir()), ['clipact.json'])
   })
 
   test('defineCli rejects a relative sender path', () => {
@@ -559,12 +576,53 @@ describe('telemetry commands', () => {
     )
   })
 
-  test('disable without a state directory is state_unwritable', async () => {
+  test('disable without a folder is state_unwritable', async () => {
     const result = await invoke(cli, ['telemetry', 'disable', '--json'], {})
-    assert.equal(
-      (assertContract(result).error as { code: string }).code,
-      'state_unwritable'
+    const error = assertContract(result).error as {
+      code: string
+      message: string
+    }
+    assert.equal(error.code, 'state_unwritable')
+    assert.match(error.message, /set ACME_CONFIG_DIR or (HOME|LOCALAPPDATA)/)
+  })
+
+  test('disable is timeout while another process holds the lock', async () => {
+    await mkdir(dir(), { recursive: true })
+    await writeFile(`${file()}.lock`, `${process.pid} ${hostname()}`)
+    const result = await invoke(cli, ['telemetry', 'disable', '--json'], {
+      env,
+    })
+    const error = assertContract(result).error as {
+      code: string
+      retryable: boolean
+    }
+    assert.equal(error.code, 'timeout')
+    assert.equal(error.retryable, true)
+  })
+
+  test('disable saves the choice in <PREFIX>_CONFIG_DIR', async () => {
+    const custom = join(home, 'custom')
+    const result = await invoke(cli, ['telemetry', 'disable', '--json'], {
+      env: { ...env, ACME_CONFIG_DIR: custom },
+    })
+    assertContract(result)
+    assert.deepEqual(
+      JSON.parse(await readFile(join(custom, 'clipact.json'), 'utf8')),
+      { telemetry: 'disabled' }
     )
+    await assert.rejects(readdir(dir()), { code: 'ENOENT' })
+  })
+
+  test('a saved installation ID is kept by later first-run writes', async () => {
+    const ids = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        updateState(dir(), (state) => ({
+          ...state,
+          installId: state.installId ?? crypto.randomUUID(),
+        }))
+      )
+    )
+    assert.equal(new Set(ids.map((state) => state.installId)).size, 1)
   })
 })
 
