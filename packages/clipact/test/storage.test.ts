@@ -312,11 +312,13 @@ describe('defineStore', () => {
     assert.equal('telemetry' in config, false)
   })
 
-  test('the name clipact is reserved', () => {
-    assert.throws(
-      () => defineStore({ schema: z.object({}), name: 'clipact' }),
-      /Store name "clipact" is reserved for clipact/
-    )
+  test('the name clipact is reserved in any case', () => {
+    for (const name of ['clipact', 'Clipact', 'CLIPACT']) {
+      assert.throws(
+        () => defineStore({ schema: z.object({}), name }),
+        new RegExp(`Store name "${name}" is reserved for clipact`)
+      )
+    }
   })
 
   test('store.get() needs a CLI defined with the store', async () => {

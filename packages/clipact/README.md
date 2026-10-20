@@ -345,7 +345,7 @@ clipact handles the store this way:
 - Each write is atomic, gives the file mode `0600`, and holds a lock, so parallel runs of the CLI do not lose each other's changes.
 - A corrupt file, or one that fails the schema, is `config_invalid` with the file's `path`. A write the folder refuses is `state_unwritable`. A lock that another process holds for more than a second is `timeout`. A command that uses the store declares `state_unwritable` and `config_invalid` in its `errors`.
 - The store never fills command input. A handler that falls back to a saved value, such as the default network, reads the store itself.
-- `store.get(ctx)` throws a `TypeError` for the context of a CLI defined without this store. `defineStore` throws one for the name `clipact`, which is reserved.
+- `store.get(ctx)` throws a `TypeError` for the context of a CLI defined without this store. `defineStore` throws one for the name `clipact`, in any case, which is reserved.
 
 ### Side effects and confirmation
 
@@ -752,7 +752,7 @@ Defines the CLI's [store](#storage).
 | --- | --- | --- |
 | `schema` | `StandardSchemaV1` | A schema for the whole file, such as a zod object. It needs no JSON Schema. |
 | `defaults` | `object?` | Values for top-level keys missing from the file. Required when the schema has a required field without a default. |
-| `name` | `string?` | The file name without `.json`. Defaults to `config`. `clipact` is reserved. |
+| `name` | `string?` | The file name without `.json`. Defaults to `config`. `clipact` is reserved in any case. |
 
 The returned `Store` has `get(ctx)`, which resolves an iso-conf `Conf` for a handler's context. See the [iso-conf API](https://github.com/hugomrdias/iso-repo/tree/main/packages/iso-conf#usage) for `get`, `set`, `update`, and the rest.
 

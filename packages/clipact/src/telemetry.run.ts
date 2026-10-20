@@ -18,7 +18,13 @@ import { detectProvider } from './provider.ts'
 import { FRAMEWORK_FLAGS } from './route.ts'
 import type { Session } from './session.ts'
 import type { CommandSpec } from './spec.ts'
-import { CLIPACT_FILE, ensureDir, noDir, unwritable } from './storage.ts'
+import {
+  CLIPACT_FILE,
+  ensureDir,
+  noDir,
+  storageError,
+  unwritable,
+} from './storage.ts'
 import { type TelemetryCommand, telemetryContexts } from './telemetry.ts'
 
 /** The variable that carries the event to the sender process. */
@@ -465,7 +471,11 @@ export function saveHandler(
     try {
       await updateState(dir, (state) => ({ ...state, telemetry: choice }))
     } catch (error) {
-      throw unwritable(join(dir, `${CLIPACT_FILE}.json`), error)
+      // A lock another process holds too long is `timeout`, not a folder problem.
+      throw (
+        storageError(error, dir) ??
+        unwritable(join(dir, `${CLIPACT_FILE}.json`), error)
+      )
     }
     const { status } = await resolveTelemetry(cli, envPrefix, env, dir)
     return ctx.ok(status)

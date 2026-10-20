@@ -7,7 +7,7 @@ import {
   readFile,
   writeFile,
 } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { beforeEach, describe, test } from 'node:test'
@@ -584,6 +584,20 @@ describe('telemetry commands', () => {
     }
     assert.equal(error.code, 'state_unwritable')
     assert.match(error.message, /set ACME_CONFIG_DIR or (HOME|LOCALAPPDATA)/)
+  })
+
+  test('disable is timeout while another process holds the lock', async () => {
+    await mkdir(dir(), { recursive: true })
+    await writeFile(`${file()}.lock`, `${process.pid} ${hostname()}`)
+    const result = await invoke(cli, ['telemetry', 'disable', '--json'], {
+      env,
+    })
+    const error = assertContract(result).error as {
+      code: string
+      retryable: boolean
+    }
+    assert.equal(error.code, 'timeout')
+    assert.equal(error.retryable, true)
   })
 
   test('disable saves the choice in <PREFIX>_CONFIG_DIR', async () => {

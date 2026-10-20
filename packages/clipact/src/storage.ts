@@ -223,7 +223,7 @@ export interface StoreOptions<S extends StandardSchemaV1> {
   schema: S
   /** Values for top-level keys missing from the file; required for required fields without a schema default. */
   defaults?: DefaultsOf<S>
-  /** The file name without `.json`; defaults to `config`. `clipact` is reserved. */
+  /** The file name without `.json`; defaults to `config`. `clipact`, in any case, is reserved. */
   name?: string
 }
 
@@ -261,8 +261,9 @@ export function defineStore<S extends StandardSchemaV1>(
   options: StoreOptions<S>
 ): Store<S> {
   const name = options.name ?? 'config'
-  if (name === CLIPACT_FILE) {
-    throw new TypeError(`Store name "${CLIPACT_FILE}" is reserved for clipact`)
+  // Compared without case, because macOS and Windows file systems ignore it.
+  if (name.toLowerCase() === CLIPACT_FILE) {
+    throw new TypeError(`Store name "${name}" is reserved for clipact`)
   }
   const store: Store<S> = Object.freeze({
     kind: 'store',
