@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/hugomrdias/agents/compare/clipact-v0.4.0...clipact-v0.5.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **clipact:** the `aliases` option of `defineCli` is removed, and `schema` output no longer includes an `aliases` field. Call commands by their full path instead.
+
+### Features
+
+* **clipact:** add environment-only CLI globals ([#7](https://github.com/hugomrdias/agents/issues/7)) ([e6a51c7](https://github.com/hugomrdias/agents/commit/e6a51c701f6cec1938993b218327e1ab4359dbbe))
+* **clipact:** add opt-out usage telemetry ([#9](https://github.com/hugomrdias/agents/issues/9)) ([f2095e6](https://github.com/hugomrdias/agents/commit/f2095e630d66fa55e48ffc279153400802e1c3b8))
+* **clipact:** remove command aliases ([#4](https://github.com/hugomrdias/agents/issues/4)) ([a3a0702](https://github.com/hugomrdias/agents/commit/a3a0702e984e78f819f323c31e8020b7af8d0bfe))
+* **clipact:** report unknown schema paths from the deepest matched group ([#5](https://github.com/hugomrdias/agents/issues/5)) ([a90f9eb](https://github.com/hugomrdias/agents/commit/a90f9ebdc79e4f53e0b4d5ad467a91a21d3a3536))
+
 ## [0.4.0](https://github.com/hugomrdias/fil/compare/clipact-v0.3.0...clipact-v0.4.0) (2026-10-12)
 
 
